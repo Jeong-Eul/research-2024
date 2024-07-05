@@ -307,7 +307,7 @@ class Model(nn.Module):
         def get_word_embedding(word):
             inputs = self.tokenizer(word, return_tensors="pt", add_special_tokens=False)
             input_ids = inputs['input_ids']
-            embeddings = self.embedding_layers(input_ids)
+            embeddings = self.embedding_layers(torch.tensor(input_ids).to(x_enc.device))
             
             if embeddings.shape[1] > 1:
                 word_embedding = embeddings.mean(dim=1)
@@ -317,7 +317,7 @@ class Model(nn.Module):
             return word_embedding.squeeze()
 
         word_embeddings = [get_word_embedding(word) for word in words]
-        source_embeddings = torch.stack(word_embeddings) #(vocab, 4096)
+        source_embeddings = torch.stack(word_embeddings).to(x_enc.device) #(vocab, 4096)
 
         x_enc = x_enc.permute(0, 2, 1).contiguous()
         enc_out, n_vars = self.patch_embedding(x_enc) #.to(dtype=torch.float32)

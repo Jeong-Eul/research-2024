@@ -130,7 +130,7 @@ export TOKENIZERS_PARALLELISM=false
 export CUDA_VISIBLE_DEVICES=0,1
 
 model_name=TimeLLM-Binary
-train_epochs=2
+train_epochs=100
 learning_rate=0.001
 llama_layers=16
 

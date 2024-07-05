@@ -124,7 +124,7 @@ if __name__ == '__main__':
     parser.add_argument('--percent', type=int, default=100)
 
     args = parser.parse_args()
-
+    args.vocab = load_vocabulary()
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     # transformer_layer_classes = ["LlamaDecoderLayer"]  # 올바른 Transformer 레이어 클래스 이름을 넣어주세요
     deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
@@ -180,7 +180,7 @@ if __name__ == '__main__':
         if not os.path.exists(path) and accelerator.is_local_main_process:
             os.makedirs(path)
         
-        args.vocab = load_vocabulary()
+        
 
         time_now = time.time()
 
@@ -319,16 +319,16 @@ if __name__ == '__main__':
             else:
                 accelerator.print('Updating learning rate to {}'.format(scheduler.get_last_lr()[0]))
                 
-            if accelerator.is_main_process:
-                model_to_save = accelerator.unwrap_model(model)
-                save_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch + 1}.pt")
-                torch.save({
-                    'epoch': epoch + 1,
-                    'model_state_dict': model_to_save.state_dict(),
-                    'optimizer_state_dict': model_optim.state_dict(),
-                    'loss': train_loss,
-                }, save_path)
-                accelerator.print(f"Model saved to {save_path}")
+    if accelerator.is_main_process:
+        model_to_save = accelerator.unwrap_model(model)
+        save_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch + 1}.pt")
+        torch.save({
+            'epoch': epoch + 1,
+            'model_state_dict': model_to_save.state_dict(),
+            'optimizer_state_dict': model_optim.state_dict(),
+            'loss': train_loss,
+        }, save_path)
+        accelerator.print(f"Model saved to {save_path}")
 
     accelerator.wait_for_everyone()
     if accelerator.is_local_main_process:
