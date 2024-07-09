@@ -220,11 +220,10 @@ class Model(nn.Module):
         self.patch_embedding = PatchEmbedding(
             configs.d_model, self.patch_len, self.stride, configs.dropout)
 
-        self.word_embeddings = self.llm_model.get_input_embeddings().weight
-        self.vocab_size = self.word_embeddings.shape[0]
-        self.num_tokens = 60
-        self.mapping_layer = nn.Linear(self.vocab_size, self.num_tokens)
-
+        self.embedding_layers = self.llm_model.get_input_embeddings()
+        # self.vocab_size = self.word_embeddings.shape[0]
+        # self.num_tokens = 5
+        # self.mapping_layer = nn.Linear(self.vocab_size, self.num_tokens)
 
         self.reprogramming_layer = ReprogrammingLayer(configs.d_model, configs.n_heads, self.d_ff, self.d_llm)
 
@@ -317,7 +316,8 @@ class Model(nn.Module):
             
             return word_embedding.squeeze()
 
-        source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
+        word_embeddings = [get_word_embedding(word) for word in words]
+        source_embeddings = torch.stack(word_embeddings).to(x_enc.device) #(vocab, 4096)
 
         x_enc = x_enc.permute(0, 2, 1).contiguous()
         enc_out, n_vars = self.patch_embedding(x_enc) #.to(dtype=torch.float32)

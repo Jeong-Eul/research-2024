@@ -8,7 +8,7 @@ from torch import nn, optim
 from torch.optim import lr_scheduler
 from tqdm import tqdm
 
-from models import Autoformer, DLinear, TimeLLM, TimeLLM_custom
+from models import Autoformer, DLinear, TimeLLM, TimeLLM_custom, Get_score
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -99,8 +99,8 @@ if __name__ == '__main__':
                         help='time features encoding, options:[timeF, fixed, learned]')
     parser.add_argument('--activation', type=str, default='gelu', help='activation')
     parser.add_argument('--output_attention', action='store_true', help='whether to output attention in encoder')
-    parser.add_argument('--patch_len', type=int, default=16, help='patch length')
-    parser.add_argument('--stride', type=int, default=8, help='stride')
+    parser.add_argument('--patch_len', type=int, default=12, help='patch length')
+    parser.add_argument('--stride', type=int, default=10, help='stride')
     parser.add_argument('--prompt_domain', type=int, default=0, help='')
     parser.add_argument('--llm_model', type=str, default='LLAMA', help='LLM model') # LLAMA, GPT2, BERT
     parser.add_argument('--llm_dim', type=int, default='4096', help='LLM model dimension')# LLama7b:4096; GPT2-small:768; BERT-base:768
@@ -173,8 +173,10 @@ if __name__ == '__main__':
             model = DLinear.Model(args).float()
         elif args.model == 'TimeLLM':
             model = TimeLLM.Model(args)
-        else:
+        elif args.model == 'TimeLLM-Custom':
             model = TimeLLM_custom.Model(args)
+        else:
+            model = Get_score.Model(args)
 
         path = os.path.join(args.checkpoints,
                             setting + '-' + args.model_comment)  # unique checkpoint saving path
@@ -197,7 +199,7 @@ if __name__ == '__main__':
         model_optim = optim.Adam(trained_parameters, lr=args.learning_rate)
 
         if args.lradj == 'COS':
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(model_optim, T_max=20, eta_min=1e-8)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(model_optim, T_max=8, eta_min=1e-5)
         else:
             scheduler = lr_scheduler.OneCycleLR(optimizer=model_optim,
                                                 steps_per_epoch=train_steps,
@@ -323,7 +325,7 @@ if __name__ == '__main__':
                 
     if accelerator.is_main_process:
         model_to_save = accelerator.unwrap_model(model)
-        save_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch + 1}.pt")
+        save_path = os.path.join(checkpoint_dir, f"Customizing0710{epoch + 1}.pt")
         torch.save({
             'epoch': epoch + 1,
             'model_state_dict': model_to_save.state_dict(),
