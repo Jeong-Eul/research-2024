@@ -84,7 +84,7 @@ class Dataset_ETT_hour(Dataset):
             data_stamp = data_stamp.transpose(1, 0)
 
         self.data_x = data[border1:border2]
-        self.data_y = data[border1:border2]
+        self.data_y = train_data.iloc[:, -1].values
         self.data_stamp = data_stamp
 
 
@@ -107,7 +107,7 @@ class Dataset_ETT_hour(Dataset):
         r_end = r_begin + self.label_len + self.pred_len 
 
         seq_x = self.data_x[s_begin:s_end, :-1]  
-        seq_y = self.data_y[s_end:r_end, -1]  
+        seq_y = self.data_y[s_end:r_end]  
         
         seq_x_mark = self.data_stamp[s_begin:s_end]
         seq_y_mark = self.data_stamp[r_begin:r_end]

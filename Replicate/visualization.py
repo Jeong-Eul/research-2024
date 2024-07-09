@@ -7,8 +7,8 @@ from accelerate import DistributedDataParallelKwargs
 from torch import nn, optim
 from torch.optim import lr_scheduler
 from tqdm import tqdm
-
-from models import Autoformer, DLinear, TimeLLM, TimeLLM_custom
+import torch.nn.functional as F
+from models import Autoformer, DLinear, TimeLLM
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -19,7 +19,7 @@ logging.getLogger("deepspeed").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
 
-from data_provider.data_factory import data_provider
+from data_provider.data_factory import data_provider_testing
 import time
 import random
 import numpy as np
@@ -111,10 +111,10 @@ if __name__ == '__main__':
     parser.add_argument('--itr', type=int, default=1, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
     parser.add_argument('--align_epochs', type=int, default=10, help='alignment epochs')
-    parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
+    parser.add_argument('--batch_size', type=int, default=8, help='batch size of train input data')
     parser.add_argument('--eval_batch_size', type=int, default=8, help='batch size of model evaluation')
     parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
-    parser.add_argument('--learning_rate', type=float, default=0.01, help='optimizer learning rate')
+    parser.add_argument('--learning_rate', type=float, default=0.0001, help='optimizer learning rate')
     parser.add_argument('--des', type=str, default='test', help='exp description')
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
@@ -125,23 +125,14 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.vocab = load_vocabulary()
-    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-    # transformer_layer_classes = ["LlamaDecoderLayer"]  # 올바른 Transformer 레이어 클래스 이름을 넣어주세요
-    deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
+    # ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    # # transformer_layer_classes = ["LlamaDecoderLayer"]  # 올바른 Transformer 레이어 클래스 이름을 넣어주세요
     # deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
-    accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], deepspeed_plugin=deepspeed_plugin)
-    # deepspeed_plugin.transformer_layer_classes = transformer_layer_classes
-    
-    
-    def create_dir_if_not_exists(directory):
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-
-    # 체크포인트를 저장할 디렉토리
-    checkpoint_dir = './model_checkpoint'
-    create_dir_if_not_exists(checkpoint_dir)
-
-    print("Accelerator 설정 완료")
+    # # deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
+    # accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], deepspeed_plugin=deepspeed_plugin)
+    # # deepspeed_plugin.transformer_layer_classes = transformer_layer_classes
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    # print("Accelerator 설정 완료")
 
     for ii in range(args.itr):
         # setting record of experiments
@@ -163,177 +154,73 @@ if __name__ == '__main__':
             args.embed,
             args.des, ii)
 
-        train_data, train_loader = data_provider(args, args.data, flag = 'train')
-        vali_data, vali_loader = data_provider(args, args.data, flag = 'val')
-        test_data, test_loader = data_provider(args, args.data, flag = 'test')
+        train_data, train_loader = data_provider_testing(args, args.data, flag = 'train')
 
         if args.model == 'Autoformer':
             model = Autoformer.Model(args).float()
         elif args.model == 'DLinear':
             model = DLinear.Model(args).float()
-        elif args.model == 'TimeLLM':
-            model = TimeLLM.Model(args)
         else:
-            model = TimeLLM_custom.Model(args)
+            model = TimeLLM.Model(args).to(device)
 
         path = os.path.join(args.checkpoints,
                             setting + '-' + args.model_comment)  # unique checkpoint saving path
         args.content = load_content(args)
-        if not os.path.exists(path) and accelerator.is_local_main_process:
-            os.makedirs(path)
+        # if not os.path.exists(path) and accelerator.is_local_main_process:
+        #     os.makedirs(path)
         
+        print('Model Loading...')
+        checkpoint = torch.load('/home/DAHS2/Timellm/Replicate/model_checkpoint/model_epoch_30.pt')
+        model.load_state_dict(checkpoint['model_state_dict'])
+        print('Complete')
         
-
-        time_now = time.time()
-
-        train_steps = len(train_loader)
-        early_stopping = EarlyStopping(accelerator=accelerator, patience=args.patience)
-
         trained_parameters = []
         for p in model.parameters():
             if p.requires_grad is True:
                 trained_parameters.append(p)
-
-        model_optim = optim.Adam(trained_parameters, lr=args.learning_rate)
-
-        if args.lradj == 'COS':
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(model_optim, T_max=20, eta_min=1e-8)
-        else:
-            scheduler = lr_scheduler.OneCycleLR(optimizer=model_optim,
-                                                steps_per_epoch=train_steps,
-                                                pct_start=args.pct_start,
-                                                epochs=args.train_epochs,
-                                                max_lr=args.learning_rate)
-
-        # criterion = nn.BCELoss()
-        criterion = nn.BCEWithLogitsLoss()
-        # mae_metric = nn.L1Loss()
-
-        # train_loader, vali_loader, test_loader, model, model_optim, scheduler = accelerator.prepare(
-        #     train_loader, vali_loader, test_loader, model, model_optim, scheduler)
         
-        # 데이터 로더와 모델 준비
-        try:
-            train_loader, vali_loader, test_loader, model, model_optim, scheduler = accelerator.prepare(
-                train_loader, vali_loader, test_loader, model, model_optim, scheduler)
-            print("accelerator.prepare 완료")
-        except Exception as e:
-            print(f"accelerator.prepare 중 에러 발생: {e}")
+        model_optim = optim.Adam(trained_parameters, lr=args.learning_rate)
+        
+        time_now = time.time()
+        
+        # try:
+        #     model_optim,train_loader, model = accelerator.prepare(model_optim,
+        #         train_loader, model)
+        #     print("accelerator.prepare 완료")
+        # except Exception as e:
+        #     print(f"accelerator.prepare 중 에러 발생: {e}")
         
 
         if args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
         
-        for epoch in range(args.train_epochs):
-            iter_count = 0
-            train_loss = []
+        iter_count = 0
 
-            model.train()
+        model.eval()
+        outputs_list = []
+
+        with torch.no_grad():
             epoch_time = time.time()
+            total_samples = 0
+            
             for i, (batch_x, batch_y, _, _) in tqdm(enumerate(train_loader)):
-                iter_count += 1
-                model_optim.zero_grad()
 
-                batch_x = batch_x.bfloat16().to(accelerator.device)
-                batch_y = batch_y.bfloat16().to(accelerator.device)
-             
-                # decoder input
-                # dec_inp = torch.zeros_like(batch_y[:, -args.pred_len:, :]).float().to(
-                #     accelerator.device)
-                # dec_inp = torch.cat([batch_y[:, :args.label_len, :], dec_inp], dim=1).float().to(
-                #     accelerator.device)
+                batch_x = batch_x.bfloat16().to(device)
+                batch_y = batch_y.bfloat16().to(device)
 
-                # encoder - decoder
-                if args.use_amp:
-                    with torch.cuda.amp.autocast():
-                        if args.output_attention:
-                            outputs = model(batch_x)[0]
-                        else:
-                            outputs = model(batch_x)
-
-                        f_dim = -1 if args.features == 'MS' else 0
-                        # outputs = outputs[:, -args.pred_len:, : ]
-                        # batch_y = batch_y[:, -args.pred_len:, : ].to(accelerator.device)
-                        
-                        loss = criterion(outputs, batch_y.to(accelerator.device))
-                        train_loss.append(loss.item())
-                else:
+                with torch.cuda.amp.autocast():
                     if args.output_attention:
                         outputs = model(batch_x)[0]
                     else:
                         outputs = model(batch_x)
 
-                    f_dim = -1 if args.features == 'MS' else 0
-                    outputs = outputs[:, -args.pred_len:]
-                    batch_y = batch_y[:, -args.pred_len:]
-                    loss = criterion(outputs, batch_y)
-                    train_loss.append(loss.item())
-                
-    
-                if (i + 1) % 100 == 0:
-                    accelerator.print(
-                        "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
-                    speed = (time.time() - time_now) / iter_count
-                    left_time = speed * ((args.train_epochs - epoch) * train_steps - i)
-                    accelerator.print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
-                    iter_count = 0
-                    time_now = time.time()
+                # 텐서로 변환하여 결과를 리스트에 추가
+                outputs_list.append(outputs.sigmoid_().detach().cpu().numpy())
 
-                # if args.use_amp:
-                #     scaler.scale(loss).backward()
-                #     scaler.step(model_optim)
-                #     scaler.update()
-                # else:
-                accelerator.backward(loss)
-                model_optim.step()
+            print('Evaluation Start')
+            outputs_arrays = np.concatenate(outputs_list)
+            np.save('/home/DAHS2/Timellm/Replicate/Result/Predicted Result/result', outputs_arrays)
 
-                if args.lradj == 'TST':
-                    adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=False)
-                    scheduler.step()
-                gc.collect()
-                torch.cuda.empty_cache()
-            accelerator.print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
-            train_loss = np.average(train_loss)
-            # vali_loss, vali_mae_loss = vali(args, accelerator, model, vali_data, vali_loader, criterion)
-            # test_loss, test_mae_loss = vali(args, accelerator, model, test_data, test_loader, criterion)
-            # accelerator.print(
-            #     "Epoch: {0} | Train Loss: {1:.7f} Vali Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
-            #         epoch + 1, train_loss, vali_loss, test_loss, test_mae_loss))
-            accelerator.print(
-                "Epoch: {0} | Train Loss: {1:.7f}".format(
-                    epoch + 1, train_loss))
-
-            # early_stopping(vali_loss, model, path)
-            # if early_stopping.early_stop:
-            #     accelerator.print("Early stopping")
-            #     break
-
-            if args.lradj != 'TST':
-                if args.lradj == 'COS':
-                    scheduler.step()
-                    accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
-                else:
-                    if epoch == 0:
-                        args.learning_rate = model_optim.param_groups[0]['lr']
-                        accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
-                    adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=True)
-
-            else:
-                accelerator.print('Updating learning rate to {}'.format(scheduler.get_last_lr()[0]))
-                
-    if accelerator.is_main_process:
-        model_to_save = accelerator.unwrap_model(model)
-        save_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch + 1}.pt")
-        torch.save({
-            'epoch': epoch + 1,
-            'model_state_dict': model_to_save.state_dict(),
-            'optimizer_state_dict': model_optim.state_dict(),
-            'loss': train_loss,
-        }, save_path)
-        accelerator.print(f"Model saved to {save_path}")
-
-    accelerator.wait_for_everyone()
-    if accelerator.is_local_main_process:
-        path = './checkpoints'  # unique checkpoint saving path
-        del_files(path)  # delete checkpoint files
-        accelerator.print('success delete checkpoints')
+            time_now = time.time()
+            gc.collect()
+            torch.cuda.empty_cache()
