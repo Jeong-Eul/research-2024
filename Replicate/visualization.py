@@ -99,8 +99,8 @@ if __name__ == '__main__':
                         help='time features encoding, options:[timeF, fixed, learned]')
     parser.add_argument('--activation', type=str, default='gelu', help='activation')
     parser.add_argument('--output_attention', action='store_true', help='whether to output attention in encoder')
-    parser.add_argument('--patch_len', type=int, default=12, help='patch length')
-    parser.add_argument('--stride', type=int, default=10, help='stride')
+    parser.add_argument('--patch_len', type=int, default=16, help='patch length')
+    parser.add_argument('--stride', type=int, default=8, help='stride')
     parser.add_argument('--prompt_domain', type=int, default=0, help='')
     parser.add_argument('--llm_model', type=str, default='LLAMA', help='LLM model') # LLAMA, GPT2, BERT
     parser.add_argument('--llm_dim', type=int, default='4096', help='LLM model dimension')# LLama7b:4096; GPT2-small:768; BERT-base:768
@@ -177,7 +177,7 @@ if __name__ == '__main__':
         #     os.makedirs(path)
         
         print('Model Loading...')
-        checkpoint = torch.load('/home/DAHS2/Timellm/Replicate/model_checkpoint/Customizing070915.pt')
+        checkpoint = torch.load('/home/DAHS2/Timellm/Replicate/model_checkpoint/Customizing071015.pt')
         model.load_state_dict(checkpoint['model_state_dict'])
         print('Complete')
         
@@ -217,22 +217,23 @@ if __name__ == '__main__':
 
                     with torch.cuda.amp.autocast():
                         if args.output_attention:
-                            _, score, patch = model(batch_x)[0]
+                            _, score = model(batch_x)[0]
                         else:
-                            _, score, patch = model(batch_x)
+                            _, score = model(batch_x)
 
                     score = score.detach().cpu().numpy()
-                    patch = patch.detach().cpu().numpy()
+                    # patch = patch.detach().cpu().numpy()
                     
                     if i == 0:
                         break
     
                 np.save('/home/DAHS2/Timellm/Replicate/Result/Predicted Result/score', score)
-                np.save('/home/DAHS2/Timellm/Replicate/Result/Predicted Result/patch', patch)
+                # np.save('/home/DAHS2/Timellm/Replicate/Result/Predicted Result/patch', patch)
 
                 time_now = time.time()
                 gc.collect()
                 torch.cuda.empty_cache()
+                print('Complete!!')
             
         else:
             print('Evaluation')

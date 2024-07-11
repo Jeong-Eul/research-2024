@@ -99,8 +99,8 @@ if __name__ == '__main__':
                         help='time features encoding, options:[timeF, fixed, learned]')
     parser.add_argument('--activation', type=str, default='gelu', help='activation')
     parser.add_argument('--output_attention', action='store_true', help='whether to output attention in encoder')
-    parser.add_argument('--patch_len', type=int, default=12, help='patch length')
-    parser.add_argument('--stride', type=int, default=10, help='stride')
+    parser.add_argument('--patch_len', type=int, default=16, help='patch length')
+    parser.add_argument('--stride', type=int, default=8, help='stride')
     parser.add_argument('--prompt_domain', type=int, default=0, help='')
     parser.add_argument('--llm_model', type=str, default='LLAMA', help='LLM model') # LLAMA, GPT2, BERT
     parser.add_argument('--llm_dim', type=int, default='4096', help='LLM model dimension')# LLama7b:4096; GPT2-small:768; BERT-base:768
@@ -272,14 +272,14 @@ if __name__ == '__main__':
                     train_loss.append(loss.item())
                 
     
-                if (i + 1) % 100 == 0:
-                    accelerator.print(
-                        "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
-                    speed = (time.time() - time_now) / iter_count
-                    left_time = speed * ((args.train_epochs - epoch) * train_steps - i)
-                    accelerator.print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
-                    iter_count = 0
-                    time_now = time.time()
+                # if (i + 1) % 100 == 0:
+                #     accelerator.print(
+                #         "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
+                #     speed = (time.time() - time_now) / iter_count
+                #     left_time = speed * ((args.train_epochs - epoch) * train_steps - i)
+                #     accelerator.print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
+                #     iter_count = 0
+                #     time_now = time.time()
 
                 # if args.use_amp:
                 #     scaler.scale(loss).backward()
@@ -322,6 +322,16 @@ if __name__ == '__main__':
 
             else:
                 accelerator.print('Updating learning rate to {}'.format(scheduler.get_last_lr()[0]))
+            
+            
+            # if (i + 1) % (epoch+1) == 0:
+            #     accelerator.print(
+            #         "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
+            #     speed = (time.time() - time_now) / iter_count
+            #     left_time = speed * ((args.train_epochs - epoch - 1) * train_steps)
+            #     accelerator.print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
+            #     iter_count = 0
+            #     time_now = time.time()
                 
     if accelerator.is_main_process:
         model_to_save = accelerator.unwrap_model(model)
