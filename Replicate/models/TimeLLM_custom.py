@@ -254,60 +254,97 @@ class Model(nn.Module):
 
     def forecast(self, x_enc):
 
-        # x_enc = self.normalize_layers(x_enc, 'norm')
-        x_enc = x_enc.to(dtype=torch.float32)
-        B, T, N = x_enc.size() #(B, 128, 6)
-        # x_enc = x_enc.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
-        x_enc = x_enc.permute(0, 2, 1).contiguous().reshape(N, B * T)
+        # # x_enc = self.normalize_layers(x_enc, 'norm')
+        # x_enc = x_enc.to(dtype=torch.float32)
+        # B, T, N = x_enc.size() #(B, 128, 6)
+        # # x_enc = x_enc.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
+        # x_enc = x_enc.permute(0, 2, 1).contiguous().reshape(N, B * T)
 
-        min_values = torch.min(x_enc, dim=1)[0] # 변수 별로, T만큼의 시퀀스가 존재하는 torch array임. dim = 1 방향은 각 변수 별 시퀀스를 의미, 따라서 각 변수별로 통계값이 산출됨
-        max_values = torch.max(x_enc, dim=1)[0]
-        medians = torch.median(x_enc, dim=1).values
-        # lags = self.calcute_lags(x_enc)
-        trends = x_enc.diff(dim=1).sum(dim=1)
-        # The above code is not doing anything. It contains a comment "# Python" followed by a line
-        # with the word "variable" and then more comment symbols "
+        # min_values = torch.min(x_enc, dim=1)[0] # 변수 별로, T만큼의 시퀀스가 존재하는 torch array임. dim = 1 방향은 각 변수 별 시퀀스를 의미, 따라서 각 변수별로 통계값이 산출됨
+        # max_values = torch.max(x_enc, dim=1)[0]
+        # medians = torch.median(x_enc, dim=1).values
+        # # lags = self.calcute_lags(x_enc)
+        # trends = x_enc.diff(dim=1).sum(dim=1)
+        # # The above code is not doing anything. It contains a comment "# Python" followed by a line
+        # # with the word "variable" and then more comment symbols "
+        # variable = ['High UseFul Load', 'High UseLess Load', 'Medium UseFul Load', 'Medium UseLess Load', 'Low UseFul Load', 'Low UseLess Load']
+        # num_variable = len(variable)
+        # prompt = []
+        
+        # for b in range(x_enc.shape[0]):
+        #     current_val = variable[b]
+        #     min_values_str = str(min_values.tolist()[0])
+        #     max_values_str = str(max_values.tolist()[0])
+        #     median_values_str = str(medians.tolist()[0])
+        #     # lags_values_str = str(lags[b].tolist())
+        #     # prompt_ = (
+        #     #     f"<|start_prompt|>Dataset description: {self.description}"
+        #     #     f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information; "
+        #     #     "Input statistics: "
+        #     #     f"min value {min_values_str}, "
+        #     #     f"max value {max_values_str}, "
+        #     #     f"median value {median_values_str}, "
+        #     #     f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
+        #     #     f"top 5 lags are : {lags_values_str}<|<end_prompt>|>"
+        #     # )
+        #     prompt_ = (
+        #         f"<|start_prompt|>Dataset description: {self.description}"
+        #         f"Task description: classify each of the next {str(self.pred_len)} based on information from the previous {str(self.seq_len)} steps using {str(num_variable)} variables in all of batch sequence; "
+        #         "Input statistics: "
+        #         f"min value of {current_val} in all of batch sequence is {min_values_str}, "
+        #         f"max value of {current_val} in all of batch sequence is  {max_values_str}, "
+        #         f"median value of {current_val} in all of batch sequence is  {median_values_str}, "
+        #         f"the trend of {current_val} in all of batch sequence is {'upward' if trends[b] > 0 else 'downward'}<|<end_prompt>|> "
+        #         # f"top 5 lags of {current_val} in all of batch sequence : {lags_values_str}<|<end_prompt>|>"
+        #     )
+
+        #     prompt.append(prompt_) # data description 설명은 공통으로 변수 별 차이 없이 들어감 !, 또한 prompt_는 변수의 갯수만큼 만들어짐 # N, prompt_tokens
+        
+        x_enc = self.normalize_layers(x_enc, 'norm')
+        x_enc = x_enc.to(dtype=torch.float32)
+        B, T, N = x_enc.size()  # (B, 128, 6)
+
+        # 각 배치에 대해 개별적으로 프롬프트 생성
         variable = ['High UseFul Load', 'High UseLess Load', 'Medium UseFul Load', 'Medium UseLess Load', 'Low UseFul Load', 'Low UseLess Load']
         num_variable = len(variable)
-        prompt = []
+        prompts = []
+        for i in range(B):
+            batch_data = x_enc[i]  # (T, N)
+            
+            # 각 변수에 대해 통계값 계산
+            min_values = torch.min(batch_data, dim=0)[0]
+            max_values = torch.max(batch_data, dim=0)[0]
+            medians = torch.median(batch_data, dim=0).values
+            trends = batch_data.diff(dim=0).sum(dim=0)
+            
+            for j in range(N):
+                current_val = variable[j]
+                min_values_str = str(min_values[j].item())
+                max_values_str = str(max_values[j].item())
+                median_values_str = str(medians[j].item())
+                trend_str = 'upward' if trends[j] > 0 else 'downward'
+                
+                prompt_ = (
+                    f"Dataset description: {self.description} "
+                    f"Task description: classify each of the next {str(self.pred_len)} based on information from the previous {str(self.seq_len)} steps using {str(num_variable)} variables in the batch sequence; "
+                    "Input statistics: "
+                    f"min value of {current_val} in the batch sequence is {min_values_str}, "
+                    f"max value of {current_val} in the batch sequence is {max_values_str}, "
+                    f"median value of {current_val} in the batch sequence is {median_values_str}, "
+                    f"the trend of {current_val} in the batch sequence is {trend_str}<|<end_prompt>|> "
+                )
+                
+                prompts.append(prompt_)
         
-        for b in range(x_enc.shape[0]):
-            current_val = variable[b]
-            min_values_str = str(min_values.tolist()[0])
-            max_values_str = str(max_values.tolist()[0])
-            median_values_str = str(medians.tolist()[0])
-            # lags_values_str = str(lags[b].tolist())
-            # prompt_ = (
-            #     f"<|start_prompt|>Dataset description: {self.description}"
-            #     f"Task description: forecast the next {str(self.pred_len)} steps given the previous {str(self.seq_len)} steps information; "
-            #     "Input statistics: "
-            #     f"min value {min_values_str}, "
-            #     f"max value {max_values_str}, "
-            #     f"median value {median_values_str}, "
-            #     f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "
-            #     f"top 5 lags are : {lags_values_str}<|<end_prompt>|>"
-            # )
-            prompt_ = (
-                f"<|start_prompt|>Dataset description: {self.description}"
-                f"Task description: classify each of the next {str(self.pred_len)} based on information from the previous {str(self.seq_len)} steps using {str(num_variable)} variables in all of batch sequence; "
-                "Input statistics: "
-                f"min value of {current_val} in all of batch sequence is {min_values_str}, "
-                f"max value of {current_val} in all of batch sequence is  {max_values_str}, "
-                f"median value of {current_val} in all of batch sequence is  {median_values_str}, "
-                f"the trend of {current_val} in all of batch sequence is {'upward' if trends[b] > 0 else 'downward'}<|<end_prompt>|> "
-                # f"top 5 lags of {current_val} in all of batch sequence : {lags_values_str}<|<end_prompt>|>"
-            )
+        # x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
 
-            prompt.append(prompt_) # data description 설명은 공통으로 변수 별 차이 없이 들어감 !, 또한 prompt_는 변수의 갯수만큼 만들어짐 # N, prompt_tokens
-        
-        x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
-
-        prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids # N, 문장 별 최대 토큰 수
+        prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids # B*N, 문장 별 최대 토큰 수
         
         # The code `prompt_embeddings` is likely a placeholder or a comment in Python code. It does
         # not perform any specific action or functionality in Python.
-        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # (N, prompt_token, dim)
-        repeated_prompt_embeddings = prompt_embeddings.repeat(B, 1, 1) # B*N, prompt_token, dim
+        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # (B*N, prompt_token, dim)
+        prompt_embeddings = prompt_embeddings.view(B, N, prompt_embeddings.size(1), prompt_embeddings.size(2)) # (B, N, prompt_token, dim)
+        # repeated_prompt_embeddings = prompt_embeddings.repeat(B, 1, 1) # B*N, prompt_token, dim
 
         # source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
         words = self.vocab.split(", ")
@@ -332,10 +369,10 @@ class Model(nn.Module):
         enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings) # BxN, T, 4096 - > 수정 B, N, patch_num, 4096
         # enc_out = enc_out.to(dtype = torch.float32)
         # prompt_embeddings = prompt_embeddings.to(dtype = torch.float32)
-        llama_enc_out = torch.cat([repeated_prompt_embeddings, enc_out.reshape(B*N, -1, 4096)], dim=1) # BxN, T+prompt_token, 4096
+        llama_enc_out = torch.cat([prompt_embeddings, enc_out.reshape(B*N, -1, 4096)], dim=1) # B, N, T+prompt_token, 4096
         # llama_enc_out = llama_enc_out.to(dtype = torch.float32)
         assert llama_enc_out.dtype == torch.float32, "llama_enc_out should be of type Float32"
-        dec_out = self.llm_model(inputs_embeds=llama_enc_out).hidden_states[-1] # BxN, T+prompt_token, 4096
+        dec_out = self.llm_model(inputs_embeds=llama_enc_out).hidden_states[-1] # B, N, T+prompt_token, 4096
         dec_out = dec_out[:, :, :self.d_ff] # BxN, T+prompt_token, d_ff
         del prompt, prompt_, enc_out, source_embeddings
         dec_out = torch.reshape(
