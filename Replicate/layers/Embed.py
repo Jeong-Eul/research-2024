@@ -48,7 +48,7 @@ class Custom_TokenEmbedding(nn.Module):
         super(Custom_TokenEmbedding, self).__init__()
         padding = 1 if torch.__version__ >= '1.5.0' else 2
         self.tokenConv = nn.Conv1d(in_channels=c_in, out_channels=d_model,
-                                   kernel_size=3, padding=padding, padding_mode='circular', bias=False)
+                                   kernel_size=3, padding=padding, padding_mode='circular', bias=False).to(dtype=torch.bfloat16)
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
                 nn.init.kaiming_normal_(
@@ -174,7 +174,7 @@ class ReplicationPad1d(nn.Module):
         self.padding = padding
 
     def forward(self, input: Tensor) -> Tensor:
-        input = input.to(dtype=torch.bfloat16)
+        # input = input.to(dtype=torch.bfloat16)
         replicate_padding = input[:, :, -1].unsqueeze(-1).repeat(1, 1, self.padding[-1]) 
         output = torch.cat([input, replicate_padding], dim=-1) # 마지막 값을 복제하여 차원을 추가 None
         return output
@@ -228,10 +228,10 @@ class PatchEmbedding(nn.Module):
     def forward(self, x):
         # do patching
         B, N, T = x.shape
-        x = self.padding_patch_layer(x)
+        x = self.padding_patch_layer(x.to(dtype=torch.bfloat16))
         x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)  # shape: (B, N, patch_num, patch_len)
         # Apply value_embedding while maintaining B, N, patch_num, patch_len dimensions
-        x = self.value_embedding(x)
+        x = self.value_embedding(x.to(dtype=torch.bfloat16))
         
         return self.dropout(x), N   
 

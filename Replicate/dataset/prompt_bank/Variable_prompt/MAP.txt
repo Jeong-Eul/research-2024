@@ -1,0 +1,1 @@
+Mean Arterial Pressure (MAP) is the average pressure in a patient's arteries during one cardiac cycle. It is a critical indicator of perfusion to vital organs. Typically, a normal range is known to be between 70 mmHg and 100 mmHg. Low MAP indicates inadequate blood flow to organs, while high MAP can indicate excessive pressure on the arterial walls.

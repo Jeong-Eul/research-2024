@@ -7,8 +7,8 @@ warnings.filterwarnings('ignore')
 
 # Dataloader that processing patient unit stay independently
 class PUnitSequenceDataset(Dataset):
-    def __init__(self, root_path, size=None, data_path='sepsis.csv', stay_id = 'stay_id',
-                 target='OT_binary', percent=100):
+    def __init__(self, root_path, size=None, data_path='hirid_shock_10min', stay_id = 'patientid',
+                 target='shock_next_6h', percent=100):
         if size == None:
             self.seq_len = 10
             self.label_len = 1
@@ -32,6 +32,7 @@ class PUnitSequenceDataset(Dataset):
 
     def __read_data__(self):
         df_raw = pd.read_csv(self.root_path + '/' + self.data_path)
+        df_raw.drop(['Vasopressor', 'Annotation'], axis = 1, inplace=True)
         self.patient_data = {}
         
         for stay_id, patient_df in df_raw.groupby(self.stay_id):
@@ -52,10 +53,11 @@ class PUnitSequenceDataset(Dataset):
                 r_begin = s_end - self.label_len
                 r_end = r_begin + self.label_len + self.pred_len
 
-                seq_x = patient_df.iloc[s_begin:s_end].drop(columns=[self.target]).values
+                seq_x = patient_df.iloc[s_begin:s_end].drop(columns=[self.target, self.stay_id]).values
                 seq_y = patient_df.iloc[s_end:r_end][self.target].values
-s
-                return seq_x, seq_y
+                time = patient_df.iloc[s_begin:s_end]['Time_since_ICU_admission'].values
+
+                return seq_x, seq_y, time
 
             current_index += num_sequences
 

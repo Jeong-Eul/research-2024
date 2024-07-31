@@ -50,9 +50,8 @@ class ClassificationHead(nn.Module):
         nn.init.xavier_uniform_(self.linear_2.weight)
 
     def forward(self, x):
-        B, _, _, _ = x.shape
-        x = self.flatten(x) # B, N, dff * patch num
-        x = x.view(B, -1)# B, N * dff * patch num
+        B, _, _ = x.shape
+        x = self.flatten(x) # B, N * dim * patch num
         
         # residual = x
         # x = self.linear_1(x)
@@ -230,14 +229,14 @@ class Model(nn.Module):
         self.patch_nums = int((configs.seq_len - self.patch_len) / self.stride + 2)
         self.head_nf = self.d_ff * self.patch_nums
 
-        if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            self.output_projection = FlattenHead(configs.enc_in, self.head_nf, self.pred_len,
-                                                 head_dropout=configs.dropout)
-        elif self.task_name == 'classification':
-            self.output_projection = ClassificationHead(configs.enc_in, self.head_nf, self.pred_len,
-                                                 head_dropout=configs.dropout)
-        else:
-            raise NotImplementedError
+        # if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
+        #     self.output_projection = FlattenHead(configs.enc_in, self.head_nf, self.pred_len,
+        #                                          head_dropout=configs.dropout)
+        # elif self.task_name == 'classification':
+        #     self.output_projection = ClassificationHead(configs.enc_in, self.head_nf, self.pred_len,
+        #                                          head_dropout=configs.dropout)
+        # else:
+        #     raise NotImplementedError
 
         self.normalize_layers = Normalize(configs.enc_in, affine=False)
 
@@ -300,14 +299,15 @@ class Model(nn.Module):
 
         #     prompt.append(prompt_) # data description 설명은 공통으로 변수 별 차이 없이 들어감 !, 또한 prompt_는 변수의 갯수만큼 만들어짐 # N, prompt_tokens
         
-        x_enc = self.normalize_layers(x_enc, 'norm')
+        
         x_enc = x_enc.to(dtype=torch.float32)
-        B, T, N = x_enc.size()  # (B, 128, 6)
+        B, T, N = x_enc.size()  # (B, 10, 6)
 
         # 각 배치에 대해 개별적으로 프롬프트 생성
         variable = ['High UseFul Load', 'High UseLess Load', 'Medium UseFul Load', 'Medium UseLess Load', 'Low UseFul Load', 'Low UseLess Load']
         num_variable = len(variable)
         prompts = []
+        
         for i in range(B):
             batch_data = x_enc[i]  # (T, N)
             
@@ -323,10 +323,10 @@ class Model(nn.Module):
                 max_values_str = str(max_values[j].item())
                 median_values_str = str(medians[j].item())
                 trend_str = 'upward' if trends[j] > 0 else 'downward'
-                
+                # 이렇게 해야 pad token 추가 없이 차원이 맞음
                 prompt_ = (
                     f"Dataset description: {self.description} "
-                    f"Task description: classify each of the next {str(self.pred_len)} based on information from the previous {str(self.seq_len)} steps using {str(num_variable)} variables in the batch sequence; "
+                    f"Task description: classify each of the next {str(self.pred_len)} based on information from the previous {str(self.seq_len)} steps; "
                     "Input statistics: "
                     f"min value of {current_val} in the batch sequence is {min_values_str}, "
                     f"max value of {current_val} in the batch sequence is {max_values_str}, "
@@ -335,18 +335,14 @@ class Model(nn.Module):
                 )
                 
                 prompts.append(prompt_)
+                
+        x_enc = self.normalize_layers(x_enc, 'norm')
         
-        # x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
-
-        prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids # B*N, 문장 별 최대 토큰 수
-        
-        # The code `prompt_embeddings` is likely a placeholder or a comment in Python code. It does
-        # not perform any specific action or functionality in Python.
-        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # (B*N, prompt_token, dim)
+        # prompts에는 B*N개의 원소가 들어가 있음
+        prompt = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids # B*N, prompt_token(문장 별 최대 토큰 수)
+        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # # (B*N, prompt_token, dim(4096)
         prompt_embeddings = prompt_embeddings.view(B, N, prompt_embeddings.size(1), prompt_embeddings.size(2)) # (B, N, prompt_token, dim)
-        # repeated_prompt_embeddings = prompt_embeddings.repeat(B, 1, 1) # B*N, prompt_token, dim
-
-        # source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
+        
         words = self.vocab.split(", ")
 
         def get_word_embedding(word):
@@ -365,25 +361,24 @@ class Model(nn.Module):
         source_embeddings = torch.stack(word_embeddings).to(x_enc.device) #(vocab, 4096)
 
         x_enc = x_enc.permute(0, 2, 1).contiguous()
-        enc_out, n_vars = self.patch_embedding(x_enc) #.to(dtype=torch.float32) # BxN, 65, patch_len -> 수정 B, N, patch_num, patch_len
-        enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings) # BxN, T, 4096 - > 수정 B, N, patch_num, 4096
+        enc_out, n_vars = self.patch_embedding(x_enc) # B, N, patch_num, patch_len : patch 하나가 patch len 만큼 임베딩 됨
+        enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings) # B, N, patch_num, 4096
         # enc_out = enc_out.to(dtype = torch.float32)
         # prompt_embeddings = prompt_embeddings.to(dtype = torch.float32)
-        llama_enc_out = torch.cat([prompt_embeddings, enc_out.reshape(B*N, -1, 4096)], dim=1) # B, N, T+prompt_token, 4096
-        # llama_enc_out = llama_enc_out.to(dtype = torch.float32)
-        assert llama_enc_out.dtype == torch.float32, "llama_enc_out should be of type Float32"
-        dec_out = self.llm_model(inputs_embeds=llama_enc_out).hidden_states[-1] # B, N, T+prompt_token, 4096
-        dec_out = dec_out[:, :, :self.d_ff] # BxN, T+prompt_token, d_ff
+        llama_enc_out = torch.cat([prompt_embeddings, enc_out], dim=2) # B, N, patch_num+prompt_token, 4096
+        
+        llama_enc_out.reshape(B, -1, llama_enc_out.shape[-1]).shape # variable mixing B, N * (patch_num+prompt_token), 4096
+        
+        dec_out = self.llm_model(inputs_embeds=llama_enc_out).hidden_states[-1] # B,  N * (patch_num+prompt_token), 4096
+        dec_out = dec_out[:, :, :self.d_ff] # # B,  N * (patch_num+prompt_token), d_ff
         del prompt, prompt_, enc_out, source_embeddings
-        dec_out = torch.reshape(
-            dec_out, (-1, n_vars, dec_out.shape[-2], dec_out.shape[-1])) # B, N, T+prompt_token, d_ff
-        dec_out = dec_out.permute(0, 1, 3, 2).contiguous() # B, N, d_ff, T + prompt_token
-        # dec_out = dec_out.to(dtype = torch.float32)
-        dec_out = self.output_projection(dec_out[:, :, :, -self.patch_nums:]) # B, N, d_ff, patch num -> B, pred_window, 1
-    
-        # dec_out = dec_out.permute(0, 2, 1).contiguous() # B, N, pred window -> # B, pred window, N
-
-        # dec_out = self.normalize_layers(dec_out, 'denorm')
+        
+        head_nf = args.d_ff * (self.patch_nums + prompt_embeddings.shape[-2])
+        
+        self.output_projection = ClassificationHead(configs.enc_in, head_nf, self.pred_len,
+                                                 head_dropout=configs.dropout)
+        
+        dec_out = self.output_projection(dec_out) # B, pred_window
 
         return dec_out
 

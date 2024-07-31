@@ -1,0 +1,1 @@
+Respiratory Rate (RR) is the number of breaths taken per minute. It is an important indicator of respiratory function. Typically, a normal range is known to be between 12 and 20 breaths per minute. High or low respiratory rate can indicate respiratory distress or other health issues.

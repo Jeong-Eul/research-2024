@@ -1,0 +1,1 @@
+Fraction of Inspired Oxygen (FiO2) is the concentration of oxygen in the air we breathe. It is used in medical settings to indicate the oxygen level delivered to a patient. Typically, room air has an FiO2 of 21%. Higher FiO2 levels are used to treat patients with respiratory distress or hypoxia.

@@ -1,0 +1,1 @@
+Peripheral Capillary Oxygen Saturation (SpO2) is the measure of the oxygen saturation level in the blood. It is a quick, non-invasive indicator of oxygenation. Typically, a normal range is known to be between 95% and 100%. Low SpO2 indicates hypoxia and can be a sign of respiratory or circulatory problems.

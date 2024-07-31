@@ -274,15 +274,15 @@ def test(args, accelerator, model, vali_data, test_loader, criterion):
 
 
 def load_content(args):
-    if 'ETT' in args.data:
-        file = 'ETT'
+    if str(args.data) == 'hirid':
+        file = 'HiRID'
     else:
         file = args.data
-    with open('./dataset/prompt_bank/{0}.txt'.format(file), 'r') as f:
+    with open('/home/DAHS2/Timellm/Replicate/dataset/prompt_bank/{0}.txt'.format(file), 'r') as f:
         content = f.read()
     return content
 
 def load_vocabulary():
-    with open('./dataset/vocabulary/vocab.txt', 'r') as f:
+    with open('/home/DAHS2/Timellm/Replicate/dataset/vocabulary/vocab.txt', 'r') as f:
         content = f.read()
     return content

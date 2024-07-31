@@ -1,0 +1,1 @@
+International Normalized Ratio (INR) is a standardized measurement of blood clotting time, used to monitor patients on anticoagulant therapy. Typically, a normal range for patients not on anticoagulants is between 0.8 and 1.2. A high INR indicates a risk of bleeding, while a low INR indicates a risk of clotting.
