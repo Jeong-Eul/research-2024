@@ -129,37 +129,35 @@
 export TOKENIZERS_PARALLELISM=false
 export CUDA_VISIBLE_DEVICES=0,1
 
-model_name=TimeLLM-Binary
+model_name=TimeLLM-Shock
 train_epochs=100
 learning_rate=0.001
 llama_layers=16
 
-master_port=34567
+master_port=0
 num_process=2
-batch_size=8
+batch_size=4
 d_model=16
 d_ff=16
 
-comment='TimeLLM-ETTh1_Binary'
+comment='TimeLLM-Shock'
 
-accelerate launch --config_file /home/DAHS2/.cache/huggingface/accelerate/default_config.yaml --num_processes 2 main.py \
+accelerate launch --config_file /home/DAHS2/.cache/huggingface/accelerate/default_config.yaml --num_processes 2 /home/DAHS2/Timellm/Replicate/main.py \
   --task_name classification \
   --is_training 1 \
-  --root_path ./dataset/ETT-small/ \
-  --data_path ETTh1_Binary.csv \
-  --model_id ETTh1_512_8 \
+  --root_path /home/DAHS2/Timellm/Replicate/dataset/data \
+  --data_path HiRID_shock_10min.csv.gz \
+  --trn_split_path HiRID_shock_10min_trn.csv.gz \
+  --vld_split_path HiRID_shock_10min_vld.csv.gz \
+  --tst_split_path HiRID_shock_10min_tst.csv.gz \
+  --model_id shock_10 \
   --model $model_name \
-  --data ETTh1_Binary \
-  --features M \
-  --seq_len 32 \
-  --label_len 8 \
-  --pred_len 8 \
-  --factor 3 \
-  --enc_in 6 \
-  --dec_in 7 \
+  --data hirid \
+  --seq_len 10 \
+  --label_len 1 \
+  --pred_len 1 \
+  --enc_in 22 \
   --n_heads 1 \
-  --c_out 7 \
-  --des 'Exp' \
   --itr 1 \
   --d_model $d_model \
   --d_ff $d_ff \

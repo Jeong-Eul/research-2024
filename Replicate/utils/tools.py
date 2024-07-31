@@ -139,35 +139,19 @@ def vali(args, accelerator, model, vali_data, vali_loader, criterion):
     # total_mae_loss = []
     model.eval()
     with torch.no_grad():
-        for i, (batch_x, batch_y, _, _) in tqdm(enumerate(vali_loader)):
-            batch_x = batch_x.float().to(accelerator.device)
-            batch_y = batch_y.float()
+        for i, (batch_x, batch_y, batch_time) in tqdm(enumerate(vali_loader)):
+            batch_x = batch_x.bfloat16().to(accelerator.device)
+            batch_y = batch_y.bfloat16().to(accelerator.device)
+            batch_time = batch_time.bfloat16().to(accelerator.device)
 
-            # batch_x_mark = batch_x_mark.float().to(accelerator.device)
-            # batch_y_mark = batch_y_mark.float().to(accelerator.device)
-
-            # decoder input
-            # dec_inp = torch.zeros_like(batch_y[:, -args.pred_len:, :]).float()
-            # dec_inp = torch.cat([batch_y[:, :args.label_len, :], dec_inp], dim=1).float().to(
-            #     accelerator.device)
-            # encoder - decoder
             if args.use_amp:
                 with torch.cuda.amp.autocast():
                     if args.output_attention:
-                        outputs = model(batch_x)[0]
+                        outputs = model(batch_x, batch_time)[0]
                     else:
-                        outputs = model(batch_x)
-            else:
-                if args.output_attention:
-                    outputs = model(batch_x)[0]
-                else:
-                    outputs = model(batch_x)
+                        outputs = model(batch_x, batch_time)
 
             outputs, batch_y = accelerator.gather_for_metrics((outputs, batch_y))
-
-            f_dim = -1 if args.features == 'MS' else 0
-            outputs = outputs[:, -args.pred_len:]
-            batch_y = batch_y[:, -args.pred_len:].to(accelerator.device)
 
             pred = outputs.detach()
             true = batch_y.detach()
@@ -284,5 +268,20 @@ def load_content(args):
 
 def load_vocabulary():
     with open('/home/DAHS2/Timellm/Replicate/dataset/vocabulary/vocab.txt', 'r') as f:
+        content = f.read()
+    return content
+
+def load_variable_content(variable_name):
+    with open('/home/DAHS2/Timellm/Replicate/dataset/prompt_bank/Variable_prompt/{0}.txt'.format(variable_name), 'r') as f:
+        content = f.read()
+    return content
+
+def load_missing_token(Missing_tokens):
+    with open('/home/DAHS2/Timellm/Replicate/dataset/prompt_bank/{0}.txt'.format(Missing_tokens), 'r') as f:
+        content = f.read()
+    return content
+
+def load_domain_content(domain):
+    with open('/home/DAHS2/Timellm/Replicate/dataset/prompt_bank/{0}.txt'.format(domain), 'r') as f:
         content = f.read()
     return content

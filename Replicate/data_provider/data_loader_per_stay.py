@@ -7,7 +7,7 @@ warnings.filterwarnings('ignore')
 
 # Dataloader that processing patient unit stay independently
 class PUnitSequenceDataset(Dataset):
-    def __init__(self, root_path, size=None, data_path='hirid_shock_10min', stay_id = 'patientid',
+    def __init__(self, root_path, size=None, data_path='HiRID_shock_10min.csv.gz', stay_id = 'patientid',
                  target='shock_next_6h', percent=100):
         if size == None:
             self.seq_len = 10

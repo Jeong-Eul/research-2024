@@ -19,7 +19,7 @@ logging.getLogger("deepspeed").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
 
-from data_provider.data_factory import data_provider
+from data_provider.data_factory_per_stay import PUnitSequence_Provider
 import time
 import random
 import numpy as np
@@ -29,7 +29,7 @@ import gc
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:256"
 
-from utils.tools import del_files, EarlyStopping, adjust_learning_rate, vali, load_content, load_vocabulary
+from utils.tools import del_files, EarlyStopping, adjust_learning_rate, vali, load_content, load_vocabulary, load_domain_content
 from multiprocessing import freeze_support
 if __name__ == '__main__':
     freeze_support()
@@ -63,29 +63,23 @@ if __name__ == '__main__':
 
     # data loader
     parser.add_argument('--data', type=str, required=True, default='ETTm1', help='dataset type')
-    parser.add_argument('--root_path', type=str, default='./dataset', help='root path of the data file')
-    parser.add_argument('--data_path', type=str, default='ETTh1.csv', help='data file')
-    parser.add_argument('--features', type=str, default='M',
-                        help='forecasting task, options:[M, S, MS]; '
-                            'M:multivariate predict multivariate, S: univariate predict univariate, '
-                            'MS:multivariate predict univariate')
-    parser.add_argument('--target', type=str, default='OT', help='target feature in S or MS task')
+    parser.add_argument('--stay_id', type=str, default='patientid', help='dataset type')
+    parser.add_argument('--root_path', type=str, default='./dataset/data', help='root path of the data file')
+    parser.add_argument('--data_path', type=str, default='HiRID_shock_10min.csv.gz', help='data file')
+    parser.add_argument('--trn_split_path', type=str, default='HiRID_shock_10min_trn.csv.gz', help='train data file')
+    parser.add_argument('--vld_split_path', type=str, default='HiRID_shock_10min_vld.csv.gz', help='valid data file')
+    parser.add_argument('--tst_split_path', type=str, default='HiRID_shock_10min_tst.csv.gz', help='test data file')
+    parser.add_argument('--target', type=str, default='shock_next_6h', help='target feature in S or MS task')
     parser.add_argument('--loader', type=str, default='modal', help='dataset type')
-    parser.add_argument('--freq', type=str, default='h',
-                        help='freq for time features encoding, '
-                            'options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], '
-                            'you can also use more detailed freq like 15min or 3h')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
 
     # forecasting task
     parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
     parser.add_argument('--label_len', type=int, default=48, help='start token length')
     parser.add_argument('--pred_len', type=int, default=96, help='prediction sequence length')
-    parser.add_argument('--seasonal_patterns', type=str, default='Monthly', help='subset for M4')
 
     # model define
     parser.add_argument('--enc_in', type=int, default=7, help='encoder input size')
-    parser.add_argument('--dec_in', type=int, default=7, help='decoder input size')
     parser.add_argument('--c_out', type=int, default=7, help='output size')
     parser.add_argument('--d_model', type=int, default=16, help='dimension of model')
     parser.add_argument('--n_heads', type=int, default=8, help='num of heads')
@@ -93,7 +87,6 @@ if __name__ == '__main__':
     parser.add_argument('--d_layers', type=int, default=1, help='num of decoder layers')
     parser.add_argument('--d_ff', type=int, default=32, help='dimension of fcn')
     parser.add_argument('--moving_avg', type=int, default=25, help='window size of moving average')
-    parser.add_argument('--factor', type=int, default=1, help='attn factor')
     parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
     parser.add_argument('--embed', type=str, default='timeF',
                         help='time features encoding, options:[timeF, fixed, learned]')
@@ -115,7 +108,6 @@ if __name__ == '__main__':
     parser.add_argument('--eval_batch_size', type=int, default=8, help='batch size of model evaluation')
     parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
     parser.add_argument('--learning_rate', type=float, default=0.01, help='optimizer learning rate')
-    parser.add_argument('--des', type=str, default='test', help='exp description')
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
     parser.add_argument('--pct_start', type=float, default=0.2, help='pct_start')
@@ -124,10 +116,14 @@ if __name__ == '__main__':
     parser.add_argument('--percent', type=int, default=100)
 
     args = parser.parse_args()
+    
     args.vocab = load_vocabulary()
+    args.domain = load_domain_content('Shock')
+    
+    
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     # transformer_layer_classes = ["LlamaDecoderLayer"]  # 올바른 Transformer 레이어 클래스 이름을 넣어주세요
-    deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
+    deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='/home/DAHS2/Timellm/Replicate/ds_config_zero2.json')
     # deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='./ds_config_zero2.json')
     accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], deepspeed_plugin=deepspeed_plugin)
     # deepspeed_plugin.transformer_layer_classes = transformer_layer_classes
@@ -145,12 +141,11 @@ if __name__ == '__main__':
 
     for ii in range(args.itr):
         # setting record of experiments
-        setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_{}_{}'.format(
+        setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_eb_{}'.format(
             args.task_name,
             args.model_id,
             args.model,
             args.data,
-            args.features,
             args.seq_len,
             args.label_len,
             args.pred_len,
@@ -159,21 +154,14 @@ if __name__ == '__main__':
             args.e_layers,
             args.d_layers,
             args.d_ff,
-            args.factor,
             args.embed,
-            args.des, ii)
+            ii)
+        print('Data loading......')
+        train_data, train_loader = PUnitSequence_Provider(args, args.data, flag = 'train')
+        vali_data, vali_loader = PUnitSequence_Provider(args, args.data, flag = 'val')
+        # test_data, test_loader = data_factory_per_stay.PUnitSequence_Provider(args.split_path, args, args.data, flag = 'test')
 
-        train_data, train_loader = data_provider(args, args.data, flag = 'train')
-        vali_data, vali_loader = data_provider(args, args.data, flag = 'val')
-        test_data, test_loader = data_provider(args, args.data, flag = 'test')
-
-        if args.model == 'Autoformer':
-            model = Autoformer.Model(args).float()
-        elif args.model == 'DLinear':
-            model = DLinear.Model(args).float()
-        elif args.model == 'TimeLLM':
-            model = TimeLLM.Model(args)
-        elif args.model == 'TimeLLM-Custom':
+        if args.model == 'TimeLLM-Shock':
             model = TimeLLM_custom.Model(args)
         else:
             model = Get_score.Model(args)
@@ -184,8 +172,7 @@ if __name__ == '__main__':
         if not os.path.exists(path) and accelerator.is_local_main_process:
             os.makedirs(path)
         
-        
-
+    
         time_now = time.time()
 
         train_steps = len(train_loader)
@@ -207,17 +194,16 @@ if __name__ == '__main__':
                                                 epochs=args.train_epochs,
                                                 max_lr=args.learning_rate)
 
-        # criterion = nn.BCELoss()
         criterion = nn.BCEWithLogitsLoss()
-        # mae_metric = nn.L1Loss()
+    
 
         # train_loader, vali_loader, test_loader, model, model_optim, scheduler = accelerator.prepare(
         #     train_loader, vali_loader, test_loader, model, model_optim, scheduler)
         
         # 데이터 로더와 모델 준비
         try:
-            train_loader, vali_loader, test_loader, model, model_optim, scheduler = accelerator.prepare(
-                train_loader, vali_loader, test_loader, model, model_optim, scheduler)
+            train_loader, vali_loader, model, model_optim, scheduler = accelerator.prepare(
+                train_loader, vali_loader, model, model_optim, scheduler)
             print("accelerator.prepare 완료")
         except Exception as e:
             print(f"accelerator.prepare 중 에러 발생: {e}")
@@ -232,60 +218,33 @@ if __name__ == '__main__':
 
             model.train()
             epoch_time = time.time()
-            for i, (batch_x, batch_y, _, _) in tqdm(enumerate(train_loader)):
+            for i, (batch_x, batch_y, batch_time) in tqdm(enumerate(train_loader)):
                 iter_count += 1
                 model_optim.zero_grad()
 
                 batch_x = batch_x.bfloat16().to(accelerator.device)
                 batch_y = batch_y.bfloat16().to(accelerator.device)
-             
-                # decoder input
-                # dec_inp = torch.zeros_like(batch_y[:, -args.pred_len:, :]).float().to(
-                #     accelerator.device)
-                # dec_inp = torch.cat([batch_y[:, :args.label_len, :], dec_inp], dim=1).float().to(
-                #     accelerator.device)
-
-                # encoder - decoder
+                batch_time = batch_time.bfloat16().to(accelerator.device)
+           
                 if args.use_amp:
                     with torch.cuda.amp.autocast():
                         if args.output_attention:
-                            outputs = model(batch_x)[0]
+                            outputs = model(batch_x, batch_time)[0]
                         else:
-                            outputs = model(batch_x)
+                            outputs = model(batch_x, batch_time)
 
-                        f_dim = -1 if args.features == 'MS' else 0
-                        # outputs = outputs[:, -args.pred_len:, : ]
-                        # batch_y = batch_y[:, -args.pred_len:, : ].to(accelerator.device)
-                        
                         loss = criterion(outputs, batch_y.to(accelerator.device))
                         train_loss.append(loss.item())
                 else:
                     if args.output_attention:
-                        outputs = model(batch_x)[0]
+                        outputs = model(batch_x, batch_time)[0]
                     else:
-                        outputs = model(batch_x)
+                        outputs = model(batch_x, batch_time)
 
-                    f_dim = -1 if args.features == 'MS' else 0
-                    outputs = outputs[:, -args.pred_len:]
-                    batch_y = batch_y[:, -args.pred_len:]
                     loss = criterion(outputs, batch_y)
                     train_loss.append(loss.item())
                 
     
-                # if (i + 1) % 100 == 0:
-                #     accelerator.print(
-                #         "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
-                #     speed = (time.time() - time_now) / iter_count
-                #     left_time = speed * ((args.train_epochs - epoch) * train_steps - i)
-                #     accelerator.print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
-                #     iter_count = 0
-                #     time_now = time.time()
-
-                # if args.use_amp:
-                #     scaler.scale(loss).backward()
-                #     scaler.step(model_optim)
-                #     scaler.update()
-                # else:
                 accelerator.backward(loss)
                 model_optim.step()
 
@@ -296,19 +255,19 @@ if __name__ == '__main__':
                 torch.cuda.empty_cache()
             accelerator.print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
-            # vali_loss, vali_mae_loss = vali(args, accelerator, model, vali_data, vali_loader, criterion)
+            vali_loss, vali_mae_loss = vali(args, accelerator, model, vali_data, vali_loader, criterion)
             # test_loss, test_mae_loss = vali(args, accelerator, model, test_data, test_loader, criterion)
-            # accelerator.print(
-            #     "Epoch: {0} | Train Loss: {1:.7f} Vali Loss: {2:.7f} Test Loss: {3:.7f} MAE Loss: {4:.7f}".format(
-            #         epoch + 1, train_loss, vali_loss, test_loss, test_mae_loss))
             accelerator.print(
-                "Epoch: {0} | Train Loss: {1:.7f}".format(
-                    epoch + 1, train_loss))
+                "Epoch: {0} | Train Loss: {1:.7f} Vali Loss: {2:.7f} ".format(
+                    epoch + 1, train_loss, vali_loss))
+            # accelerator.print(
+            #     "Epoch: {0} | Train Loss: {1:.7f}".format(
+            #         epoch + 1, train_loss))
 
-            # early_stopping(vali_loss, model, path)
-            # if early_stopping.early_stop:
-            #     accelerator.print("Early stopping")
-            #     break
+            early_stopping(vali_loss, model, path)
+            if early_stopping.early_stop:
+                accelerator.print("Early stopping")
+                break
 
             if args.lradj != 'TST':
                 if args.lradj == 'COS':
@@ -335,7 +294,7 @@ if __name__ == '__main__':
                 
     if accelerator.is_main_process:
         model_to_save = accelerator.unwrap_model(model)
-        save_path = os.path.join(checkpoint_dir, f"Customizing0710{epoch + 1}.pt")
+        save_path = os.path.join(checkpoint_dir, f"Customizing0731{epoch + 1}.pt")
         torch.save({
             'epoch': epoch + 1,
             'model_state_dict': model_to_save.state_dict(),
