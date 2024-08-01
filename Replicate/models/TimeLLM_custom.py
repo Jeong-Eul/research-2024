@@ -240,6 +240,8 @@ class Model(nn.Module):
         #     raise NotImplementedError
 
         self.normalize_layers = Normalize(configs.enc_in, affine=False)
+        self.enc_in = configs.enc_in
+    
 
     def forward(self, x_enc, time, mask=None):
         if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
@@ -258,12 +260,17 @@ class Model(nn.Module):
         time = time.to(dtype=torch.float32)
         B, T, N = x_enc.size()  # (B, 10, 22)
 
-        variable = ['ABPd', 'ABPs', 'Creatinine', 'HR', 'INR', 'Lactate', 'MAP',
-            'PaO2', 'Platelet_Count', 'Respiratory_rate', 'SpO2', 'pH',
+        # variable = ['ABPd', 'ABPs', 'Creatinine', 'HR', 'INR', 'Lactate', 'MAP',
+        #     'PaO2', 'Platelet_Count', 'Respiratory_rate', 'SpO2', 'pH',
+        #     'Time_since_ICU_admission', 'Height', 'Weight', 'Bilirubin',
+        #     'FiO2', 'Temperature', 'Troponin-T', 'Cardiac output', 'Sex', 'Age']
+        
+        variable = ['Creatinine', 'HR', 'Lactate', 'MAP',
+            'Platelet_Count', 'Respiratory_rate', 'SpO2',
             'Time_since_ICU_admission', 'Height', 'Weight', 'Bilirubin',
-            'FiO2', 'Temperature', 'Troponin-T', 'Cardiac output', 'Sex', 'Age']
-
-        variable_pass = ['Time_since_ICU_admission', 'Height', 'Weight', 'Temperature', 'Sex', 'Age']
+            'Troponin-T', 'Sex', 'Age']
+        
+        variable_pass = ['Time_since_ICU_admission', 'Height', 'Weight', 'Sex', 'Age']
 
         
         num_variable = len(variable)
@@ -292,8 +299,23 @@ class Model(nn.Module):
                 
                     age = str(torch.unique(batch_data[:, -1], dim=0).item())
                     sex = str(torch.unique(batch_data[:, -2], dim=0).item())
-                    Height = str(torch.unique(batch_data[:, 13], dim=0).item())
-                    Weight = str(torch.unique(batch_data[:, 14], dim=0).item())
+                    # Height = str(torch.unique(batch_data[:, 13], dim=0).item())
+                    # Weight = str(torch.unique(batch_data[:, 14], dim=0).item())
+                    
+                    if torch.unique(batch_data[:, 9], dim=0).numel() == 1:
+                        # 고유 값이 하나만 있는 경우
+                        height_str = str(torch.unique(batch_data[:, 9], dim=0).item())
+                    else:
+                        # 고유 값이 여러 개인 경우, 값을 문자열로 변환
+                        height_str = ", ".join(map(str, torch.unique(batch_data[:, 9], dim=0).tolist()))
+             
+                    if torch.unique(torch.unique(batch_data[:, 10], dim=0)).numel() == 1:
+                        # 고유 값이 하나만 있는 경우
+                        weight_str = str(torch.unique(torch.unique(batch_data[:, 10], dim=0)).item())
+                    else:
+                        # 고유 값이 여러 개인 경우, 값을 문자열로 변환
+                        weight_str = ", ".join(map(str, torch.unique(torch.unique(batch_data[:, 10], dim=0)).tolist()))
+                    
                     if sex == '1':
                         sex = 'Male'
                     else:
@@ -332,14 +354,14 @@ class Model(nn.Module):
                     prompt_ = (
                         f"Domain description: {self.description}"
                         f"Task description: Predict whether a shock will occur within the next 6 hours based on the current window information of length {str(self.seq_len)}. "
-                        f"The time series information(Time window unit start point is {time_start} minutes from ICU admission and end point is {time_finish} minutes) you are currently viewing is from a patient who is {sex}, {age} years old. This patient's height is {Height} cm and weight is {Weight} kg. "
+                        f"The time series information(Time window unit start point is {time_start} minutes from ICU admission and end point is {time_finish} minutes) you are currently viewing is from a patient who is {sex}, {age} years old. This patient's height is {height_str} cm and weight is {weight_str} kg. "
                         f"Variable description: {variable_dcb}"
                         f"Input {current_val} statistics in current time window: "
                         f"min value of {current_val} in the batch sequence is {min_values_str}, "
                         f"max value of {current_val} in the batch sequence is {max_values_str}, "
                         f"median value of {current_val} in the batch sequence is {median_values_str}, "
-                        f"the trend of {current_val} in the batch sequence is {trend_str}<|<end_prompt>|> "
-                        f"In the current window, the last measurement value of variable {current_val} is {last_value}, and the measurement time is {corresponding_time} minutes after ICU admission."
+                        f"the trend of {current_val} in the batch sequence is {trend_str}, "
+                        f"In the current window, the last measurement value of variable {current_val} is {last_value}, and the measurement time is {corresponding_time} minutes after ICU admission.<|<end_prompt>|> "
                     )
                     
                     prompts.append(prompt_)
@@ -378,7 +400,7 @@ class Model(nn.Module):
         def get_missing_tokens(tokens):
             inputs = self.tokenizer(tokens, return_tensors="pt", add_special_tokens=False)
             input_ids = inputs['input_ids']
-            embeddings = embedding_layers(torch.tensor(input_ids).to(x_enc.device))
+            embeddings =  self.embedding_layers(torch.tensor(input_ids).to(x_enc.device))
             
             if embeddings.shape[1] > 1:
                 word_embedding = embeddings.mean(dim=1).mean(dim=1)
@@ -388,7 +410,7 @@ class Model(nn.Module):
             return word_embedding.squeeze()
 
         Missing_Tokens = [get_missing_tokens(tk) for tk in tokens]
-        MS_Tokens = torch.stack(Missing_Tokens).to(x_enc.device) #(22,)
+        MS_Tokens = torch.stack(Missing_Tokens).to(x_enc.device, dtype=torch.float32) #(22,)
         
         nan_mask = torch.isnan(x_enc)
 
@@ -403,16 +425,16 @@ class Model(nn.Module):
         # prompt_embeddings = prompt_embeddings.to(dtype = torch.float32)
         llama_enc_out = torch.cat([prompt_embeddings_reduced, enc_out], dim=2) # B, N, patch_num+prompt_token, 4096
         
-        llama_enc_out.reshape(B, -1, llama_enc_out.shape[-1]).shape # variable mixing B, N * (patch_num+prompt_token), 4096
+        lets_getit = llama_enc_out.reshape(B, -1, llama_enc_out.shape[-1]) # variable mixing B, N * (patch_num+prompt_token), 4096
         
-        dec_out = self.llm_model(inputs_embeds=llama_enc_out).hidden_states[-1] # B,  N * (patch_num+prompt_token), 4096
+        dec_out = self.llm_model(inputs_embeds=lets_getit).hidden_states[-1] # B,  N * (patch_num+prompt_token), 4096
         dec_out = dec_out[:, :, :self.d_ff] # # B,  N * (patch_num+prompt_token), d_ff
         del prompt, prompt_, enc_out, source_embeddings
         
         head_nf = self.d_ff * (self.patch_nums + prompt_embeddings_reduced.shape[-2])
         
-        self.output_projection = ClassificationHead(configs.enc_in, head_nf, self.pred_len,
-                                                 head_dropout=configs.dropout)
+        self.output_projection = ClassificationHead(self.enc_in, head_nf, self.pred_len,
+                                                 head_dropout=0.1).to(x_enc.device)
         
         dec_out = self.output_projection(dec_out) # B, pred_window
 
