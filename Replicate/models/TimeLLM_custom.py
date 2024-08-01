@@ -55,17 +55,15 @@ class ClassificationHead(nn.Module):
         x = self.flatten(x) # B, N * dim * patch num
         
         # residual = x
-        # x = self.linear_1(x)
-        
-        # x = self.batch_norm1(x)
+        x = self.linear_1(x)
+        x = self.dropout(x)
+        x = self.batch_norm1(x)
         # x = self.relu(x)
         # x = x + residual
         
         x = self.linear_2(x)
-
         # x = self.batch_norm2(x)
-        
-        x = self.dropout(x)
+        # x = self.dropout(x)
         # x = self.sigmoid(x)
         # x = x.view(B, self.window, 1)
         
@@ -265,10 +263,7 @@ class Model(nn.Module):
         #     'Time_since_ICU_admission', 'Height', 'Weight', 'Bilirubin',
         #     'FiO2', 'Temperature', 'Troponin-T', 'Cardiac output', 'Sex', 'Age']
         
-        variable = ['Creatinine', 'HR', 'Lactate', 'MAP',
-            'Platelet_Count', 'Respiratory_rate', 'SpO2',
-            'Time_since_ICU_admission', 'Height', 'Weight', 'Bilirubin',
-            'Troponin-T', 'Sex', 'Age']
+        variable = ['HR', 'Lactate', 'MAP', 'Respiratory_rate', 'SpO2', 'Time_since_ICU_admission', 'Height', 'Weight', 'Sex', 'Age']
         
         variable_pass = ['Time_since_ICU_admission', 'Height', 'Weight', 'Sex', 'Age']
 
@@ -291,30 +286,26 @@ class Model(nn.Module):
                 current_val = variable[j]
                 
                 if current_val in variable_pass:
-                    prompt_ = ("This is a placeholder prompt.")
-                    prompts.append(prompt_)
                     continue
                 
                 else:
                 
                     age = str(torch.unique(batch_data[:, -1], dim=0).item())
                     sex = str(torch.unique(batch_data[:, -2], dim=0).item())
-                    # Height = str(torch.unique(batch_data[:, 13], dim=0).item())
-                    # Weight = str(torch.unique(batch_data[:, 14], dim=0).item())
                     
-                    if torch.unique(batch_data[:, 9], dim=0).numel() == 1:
+                    if torch.unique(batch_data[:, -4], dim=0).numel() == 1:
                         # 고유 값이 하나만 있는 경우
-                        height_str = str(torch.unique(batch_data[:, 9], dim=0).item())
+                        height_str = str(torch.unique(batch_data[:, -4], dim=0).item())
                     else:
                         # 고유 값이 여러 개인 경우, 값을 문자열로 변환
-                        height_str = ", ".join(map(str, torch.unique(batch_data[:, 9], dim=0).tolist()))
+                        height_str = ", ".join(map(str, torch.unique(batch_data[:, -4], dim=0).tolist()))
              
-                    if torch.unique(torch.unique(batch_data[:, 10], dim=0)).numel() == 1:
+                    if torch.unique(torch.unique(batch_data[:, -3], dim=0)).numel() == 1:
                         # 고유 값이 하나만 있는 경우
-                        weight_str = str(torch.unique(torch.unique(batch_data[:, 10], dim=0)).item())
+                        weight_str = str(torch.unique(torch.unique(batch_data[:, -3], dim=0)).item())
                     else:
                         # 고유 값이 여러 개인 경우, 값을 문자열로 변환
-                        weight_str = ", ".join(map(str, torch.unique(torch.unique(batch_data[:, 10], dim=0)).tolist()))
+                        weight_str = ", ".join(map(str, torch.unique(torch.unique(batch_data[:, -3], dim=0)).tolist()))
                     
                     if sex == '1':
                         sex = 'Male'
@@ -369,13 +360,13 @@ class Model(nn.Module):
         x_enc = self.normalize_layers(x_enc, 'norm')
         
         # prompts에는 B*N개의 원소가 들어가 있음
-        prompt = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids # B*N, prompt_token(문장 별 최대 토큰 수)
+        prompt = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids # B*(N-variable pass), prompt_token(문장 별 최대 토큰 수)
         prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # # (B*N, prompt_token, dim(4096)
-        prompt_embeddings = prompt_embeddings.view(B, N, prompt_embeddings.size(1), prompt_embeddings.size(2)) # (B, N, prompt_token, dim)
+        prompt_embeddings = prompt_embeddings.view(B, N-len(variable_pass), prompt_embeddings.size(1), prompt_embeddings.size(2)) # (B, N-len(variable_pass), prompt_token, dim)
         
         #dimensionality rediction
         prompt_embeddings_unfolded = prompt_embeddings.unfold(dimension=2, size=20, step=8)
-        prompt_embeddings_reduced = prompt_embeddings_unfolded.mean(dim=4)
+        prompt_embeddings_reduced = prompt_embeddings_unfolded.mean(dim=4) # B, N-variable pass, 56, 4096
         
         words = self.vocab.split(", ")
 
@@ -394,7 +385,7 @@ class Model(nn.Module):
         word_embeddings = [get_word_embedding(word) for word in words]
         source_embeddings = torch.stack(word_embeddings).to(x_enc.device) #(vocab, 4096)
         
-        tkn = load_missing_token('Missing_tokens')
+        tkn = load_missing_token('Missing_tokens_reduced')
         tokens = tkn.split(", ")
 
         def get_missing_tokens(tokens):
@@ -418,14 +409,21 @@ class Model(nn.Module):
         for var_idx in range(x_enc.size(1)):  # 변수 갯수 (22개)
             x_enc[:, :, var_idx][nan_mask[:, :, var_idx]] = MS_Tokens[var_idx]
 
-        x_enc = x_enc.permute(0, 2, 1).contiguous()
-        enc_out, n_vars = self.patch_embedding(x_enc) # B, N, patch_num, patch_len : patch 하나가 patch len 만큼 임베딩 됨
-        enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings) # B, N, patch_num, 4096
+        
+        # Exclude variable pass before patch embedding 
+        exclude_indices = [5, 6, 7, 8, 9]
+
+        include_indices = [i for i in range(x_enc.size(2)) if i not in exclude_indices]
+        filtered_tensor = x_enc[:, :, include_indices]
+        filtered_tensor = filtered_tensor.permute(0, 2, 1).contiguous().to(dtype=torch.bfloat16)
+        
+        enc_out, n_vars = self.patch_embedding(filtered_tensor) # B, (N-variable pass), patch_num, patch_len : patch 하나가 patch len 만큼 임베딩 됨
+        enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings) # B, (N-variable pass), patch_num, 4096
         # enc_out = enc_out.to(dtype = torch.float32)
         # prompt_embeddings = prompt_embeddings.to(dtype = torch.float32)
-        llama_enc_out = torch.cat([prompt_embeddings_reduced, enc_out], dim=2) # B, N, patch_num+prompt_token, 4096
+        llama_enc_out = torch.cat([prompt_embeddings_reduced, enc_out], dim=2) # B, (N-variable pass), patch_num+prompt_token, 4096
         
-        lets_getit = llama_enc_out.reshape(B, -1, llama_enc_out.shape[-1]) # variable mixing B, N * (patch_num+prompt_token), 4096
+        lets_getit = llama_enc_out.reshape(B, -1, llama_enc_out.shape[-1]) # variable mixing B, (N-variable pass) * (patch_num+prompt_token), 4096
         
         dec_out = self.llm_model(inputs_embeds=lets_getit).hidden_states[-1] # B,  N * (patch_num+prompt_token), 4096
         dec_out = dec_out[:, :, :self.d_ff] # # B,  N * (patch_num+prompt_token), d_ff
@@ -433,8 +431,8 @@ class Model(nn.Module):
         
         head_nf = self.d_ff * (self.patch_nums + prompt_embeddings_reduced.shape[-2])
         
-        self.output_projection = ClassificationHead(self.enc_in, head_nf, self.pred_len,
-                                                 head_dropout=0.1).to(x_enc.device)
+        self.output_projection = ClassificationHead(self.enc_in-len(variable_pass), head_nf, self.pred_len,
+                                                 head_dropout=0.1).to(filtered_tensor.device)
         
         dec_out = self.output_projection(dec_out) # B, pred_window
 
