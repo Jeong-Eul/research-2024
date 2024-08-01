@@ -136,7 +136,7 @@ llama_layers=16
 
 master_port=0
 num_process=2
-batch_size=16
+batch_size=32
 d_model=16
 d_ff=16
 

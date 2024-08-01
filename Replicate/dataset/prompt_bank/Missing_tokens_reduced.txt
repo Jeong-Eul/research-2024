@@ -1,0 +1,1 @@
+HR not measured, Lactate not measured, MAP not measured, Respiratory_rate not measured, SpO2 not measured, Time_since_ICU_admission not measured, Height not measured, Weight not measured, Sex not measured, Age not measured
