@@ -210,7 +210,7 @@ if __name__ == '__main__':
         
 
         if args.use_amp:
-            scaler = torch.cuda.amp.GradScaler()
+            scaler = torch.amp.GradScaler("cuda")
         
         for epoch in range(args.train_epochs):
             iter_count = 0
@@ -227,7 +227,7 @@ if __name__ == '__main__':
                 batch_time = batch_time.bfloat16().to(accelerator.device)
            
                 if args.use_amp:
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast('cuda'):
                         if args.output_attention:
                             outputs = model(batch_x, batch_time)[0]
                         else:
