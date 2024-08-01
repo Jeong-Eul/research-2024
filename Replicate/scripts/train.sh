@@ -136,7 +136,7 @@ llama_layers=16
 
 master_port=0
 num_process=2
-batch_size=4
+batch_size=16
 d_model=16
 d_ff=16
 
@@ -147,16 +147,16 @@ accelerate launch --config_file /home/DAHS2/.cache/huggingface/accelerate/defaul
   --is_training 1 \
   --root_path /home/DAHS2/Timellm/Replicate/dataset/data \
   --data_path HiRID_shock_10min.csv.gz \
-  --trn_split_path HiRID_shock_10min_trn.csv.gz \
-  --vld_split_path HiRID_shock_10min_vld.csv.gz \
-  --tst_split_path HiRID_shock_10min_tst.csv.gz \
+  --trn_split_path HiRID_shock_10min_trn_toy.csv.gz \
+  --vld_split_path HiRID_shock_10min_vld_toy.csv.gz \
+  --tst_split_path HiRID_shock_10min_tst_toy.csv.gz \
   --model_id shock_10 \
   --model $model_name \
   --data hirid \
   --seq_len 10 \
   --label_len 1 \
   --pred_len 1 \
-  --enc_in 22 \
+  --enc_in 10 \
   --n_heads 1 \
   --itr 1 \
   --d_model $d_model \
