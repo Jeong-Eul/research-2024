@@ -264,10 +264,11 @@ def load_vocabulary():
         content = f.read()
     return content
 
-def load_variable_content(variable_name):
-    with open('/home/DAHS2/Timellm/Replicate/dataset/prompt_bank/Variable_prompt/{0}.txt'.format(variable_name), 'r') as f:
-        content = f.read()
-    return content
+def load_variable_content():
+    import pickle
+    with open('/home/DAHS2/Timellm/Replicate_for_P19/dataset/prompt_bank/Variable_dict.pickle', 'rb') as fr:
+        variable_description = pickle.load(fr)
+    return variable_description
 
 def load_missing_token(Missing_tokens):
     with open('/home/DAHS2/Timellm/Replicate_for_P19/dataset/prompt_bank/{0}.txt'.format(Missing_tokens), 'r') as f:

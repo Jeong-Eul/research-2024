@@ -8,7 +8,12 @@ from torch import nn, optim
 from torch.optim import lr_scheduler
 from tqdm import tqdm
 
-from models import TimeLLM
+import sys
+module_path='/home/DAHS2/Timellm/Replicate_for_P19'
+if module_path not in sys.path:
+    sys.path.append(module_path)
+    
+from model import TimeLLM
 from sklearn.metrics import precision_score, recall_score ,f1_score, confusion_matrix, roc_auc_score, accuracy_score, classification_report
 
 
@@ -33,18 +38,33 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:256"
 
 from utils.tools import del_files, EarlyStopping, adjust_learning_rate, vali, load_content, load_vocabulary, load_domain_content
 from multiprocessing import freeze_support
+import torch.distributed as dist
+import atexit
+def cleanup():
+    if dist.is_initialized():
+        dist.destroy_process_group()
+        print("Process group destroyed.")
+        
+def initialize_distributed():
+    if not dist.is_initialized():
+        dist.init_process_group(backend='nccl')
+        print(f"Process group initialized on rank {dist.get_rank()}.")
+        
 if __name__ == '__main__':
+    
     freeze_support()
+    
     from accelerate import Accelerator, DeepSpeedPlugin
     from accelerate import DistributedDataParallelKwargs
-    
+ 
     os.environ['CURL_CA_BUNDLE'] = ''
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:100000"
-
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     logging.getLogger("deepspeed").setLevel(logging.ERROR)
     logging.getLogger("transformers").setLevel(logging.ERROR)
     warnings.filterwarnings("ignore")
-
+    atexit.register(cleanup)
+    initialize_distributed()
     torch.cuda.empty_cache()
     parser = argparse.ArgumentParser(description='Time-LLM')
 
@@ -82,15 +102,16 @@ if __name__ == '__main__':
     parser.add_argument('--d_ff', type=int, default=32, help='dimension of fcn')
     parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
     parser.add_argument('--prompt_domain', type=str, default='Sepsis', help='Task domain')
+    parser.add_argument('--output_attention', action='store_true', help='whether to output attention in encoder')
     parser.add_argument('--llm_model', type=str, default='LLAMA', help='LLM model') # LLAMA, GPT2, BERT
-    parser.add_argument('--llm_dim', type=int, default='4096', help='LLM model dimension')# LLama7b:4096; GPT2-small:768; BERT-base:768
+    parser.add_argument('--llm_dim', type=int, default='1024', help='LLM model dimension')# LLama7b:4096; GPT2-small:768; BERT-base:768
 
     # optimization
-    parser.add_argument('--num_workers', type=int, default=1, help='data loader num workers')
+    parser.add_argument('--num_workers', type=int, default=2, help='data loader num workers')
     parser.add_argument('--itr', type=int, default=1, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
     parser.add_argument('--align_epochs', type=int, default=10, help='alignment epochs')
-    parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
+    parser.add_argument('--batch_size', type=int, default=1, help='batch size of train input data')
     parser.add_argument('--eval_batch_size', type=int, default=8, help='batch size of model evaluation')
     parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
     parser.add_argument('--learning_rate', type=float, default=0.01, help='optimizer learning rate')
@@ -174,14 +195,13 @@ if __name__ == '__main__':
             print("accelerator.prepare 완료")
         except Exception as e:
             print(f"accelerator.prepare 중 에러 발생: {e}")
-        
 
         if args.use_amp:
             scaler = torch.amp.GradScaler("cuda")
             
         best_loss = 1000
         
-        if args.mode == 'Trian':
+        if args.mode == 'Train':
         
             for epoch in range(args.train_epochs):
                 iter_count = 0
@@ -291,7 +311,7 @@ if __name__ == '__main__':
                 path = './checkpoints'  # unique checkpoint saving path
                 del_files(path)  # delete checkpoint files
                 accelerator.print('success delete checkpoints')
-        
+            accelerator.free_memory()
         elif args.mode == 'Valid':
             print('Validation start')
             # checkpoint = torch.load('/home/DAHS2/Timellm/Replicate/scripts/model_checkpoint/Best_model_epoch_9_loss-0.9002305708135392.pt')

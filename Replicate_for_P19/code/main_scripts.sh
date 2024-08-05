@@ -8,13 +8,13 @@ llama_layers=16
 
 master_port=0
 num_process=2
-batch_size=16
+batch_size=1
 d_model=16
 d_ff=16
 
 comment='TimeLLM'
 
-accelerate launch --config_file /home/DAHS2/.cache/huggingface/accelerate/default_config.yaml --num_processes 2 run_EHRTimeLLMpy \
+accelerate launch --config_file /home/DAHS2/.cache/huggingface/accelerate/default_config.yaml --num_processes 2 run_EHRTimeLLM.py \
   --is_training 1 \
   --root_path /home/DAHS2/Timellm/Replicate_for_P19/ \
   --PT_dict_path dataset/data/processed_data/PT_dict_list_6.npy \
@@ -23,12 +23,13 @@ accelerate launch --config_file /home/DAHS2/.cache/huggingface/accelerate/defaul
   --mode Train \
   --model_id Sepsis \
   --model $model_name \
-  --data hirid \
+  --data P19 \
   --lradj COS \
   --seq_len 60 \
   --pred_len 1 \
   --n_heads 1 \
   --itr 1 \
+  --llm_model LLAMA \
   --d_model $d_model \
   --d_ff $d_ff \
   --batch_size $batch_size \
