@@ -75,7 +75,7 @@ class Model(nn.Module):
             self.llama_config.num_hidden_layers = configs.llm_layers
             self.llama_config.output_attentions = True
             self.llama_config.output_hidden_states = True
-            # self.llama_config.hidden_size = 32
+            self.llama_config.hidden_size = 1024
             try:
                 self.llm_model = AutoModelForCausalLM.from_pretrained(
                     # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/",
