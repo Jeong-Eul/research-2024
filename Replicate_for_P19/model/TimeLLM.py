@@ -2,14 +2,14 @@ from math import sqrt
 
 import torch
 import torch.nn as nn
-
+import pandas as pd
+import numpy as np
 from transformers import LlamaConfig, LlamaModel, LlamaTokenizer, GPT2Config, GPT2Model, GPT2Tokenizer, BertConfig, \
-    BertModel, BertTokenizer, AutoTokenizer, AutoModelForCausalLM
+    BertModel, BertTokenizer, AutoTokenizer, AutoModelForCausalLM, GPT2LMHeadModel
 import transformers
 from utils.tools import load_content, load_vocabulary, load_domain_content, load_variable_content, load_missing_token, min_with_na_handling, max_with_na_handling, median_with_na_handling
 
 transformers.logging.set_verbosity_error()
-
 
 class FlattenHead(nn.Module):
     def __init__(self, n_vars, nf, target_window, head_dropout=0):
@@ -75,6 +75,7 @@ class Model(nn.Module):
             self.llama_config.num_hidden_layers = configs.llm_layers
             self.llama_config.output_attentions = True
             self.llama_config.output_hidden_states = True
+            # self.llama_config.hidden_size = 32
             try:
                 self.llm_model = AutoModelForCausalLM.from_pretrained(
                     # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/",
@@ -82,7 +83,11 @@ class Model(nn.Module):
                     trust_remote_code=True,
                     # local_files_only=True,
                     config=self.llama_config,
+                    ignore_mismatched_sizes=True
                     # load_in_4bit=True,
+                ).to('cpu')
+                self.quantized_llm = torch.quantization.quantize_dynamic(
+                    self.llm_model, {torch.nn.Linear}, dtype=torch.qint8
                 )
             except EnvironmentError:  # downloads model from HF is not already done
                 print("Local model files not found. Attempting to download...")
@@ -116,34 +121,40 @@ class Model(nn.Module):
             self.gpt2_config.output_attentions = True
             self.gpt2_config.output_hidden_states = True
             try:
-                self.llm_model = GPT2Model.from_pretrained(
-                    'openai-community/gpt2',
+                self.llm_model = AutoModelForCausalLM.from_pretrained(
+                    # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/",
+                    "openai-community/gpt2",
                     trust_remote_code=True,
-                    local_files_only=True,
+                    # local_files_only=True,
                     config=self.gpt2_config,
+                    # load_in_4bit=True,
                 )
             except EnvironmentError:  # downloads model from HF is not already done
                 print("Local model files not found. Attempting to download...")
-                self.llm_model = GPT2Model.from_pretrained(
-                    'openai-community/gpt2',
+                self.llm_model = AutoModelForCausalLM.from_pretrained(
+                    # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/",
+                    "openai-community/gpt2",
                     trust_remote_code=True,
                     # local_files_only=False,
                     config=self.gpt2_config,
+                    # load_in_4bit=True
                 )
-
             try:
-                self.tokenizer = GPT2Tokenizer.from_pretrained(
-                    'openai-community/gpt2',
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/tokenizer.model",
+                    "openai-community/gpt2",
                     trust_remote_code=True,
-                    local_files_only=True
+                    # local_files_only=True
                 )
             except EnvironmentError:  # downloads the tokenizer from HF if not already done
                 print("Local tokenizer files not found. Atempting to download them..")
-                self.tokenizer = GPT2Tokenizer.from_pretrained(
-                    'openai-community/gpt2',
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/tokenizer.model",
+                    "openai-community/gpt2",
                     trust_remote_code=True,
-                    local_files_only=False
+                    # local_files_only=False
                 )
+                
         elif configs.llm_model == 'BERT':
             self.bert_config = BertConfig.from_pretrained('google-bert/bert-base-uncased')
 
@@ -191,9 +202,12 @@ class Model(nn.Module):
 
         for param in self.llm_model.parameters():
             param.requires_grad = False
+            
+        for param in self.quantized_llm.parameters():
+            param.requires_grad = False
 
         if configs.prompt_domain:
-            self.description = configs.domain
+            self.description = 'Sepsis'
         else:
             self.description = 'Sepsis'
 
@@ -228,7 +242,7 @@ class Model(nn.Module):
             time_finish = str(real_time[i].item())
             time_start = str(batch_time[0].item())
             
-            statistical_df = pd.DataFrame(x_enc[i][:real_time[i]])
+            statistical_df = pd.DataFrame(x_enc[i][:real_time[i]].cpu())
             
             min_values_series = statistical_df.apply(min_with_na_handling, axis=0)
             max_values_series = statistical_df.apply(max_with_na_handling, axis=0)
@@ -275,8 +289,8 @@ class Model(nn.Module):
                     
                 prompt_ = (
                     f"<|start_prompt|>Domain description: {domain_dcb}"
-                    f"Task Description: Predict whether this patient will develop sepsis in the future based on the current window information of length {str(args.seq_len)}. (The patient's actual data is up to {str(time_finish)}, and the {str(60 - int(time_finish))} hours after this should not be considered.)"
-                    f"The time series information(Time window unit start point is {time_start} minutes from ICU admission and end point is {time_finish} minutes) you are currently viewing is from a patient who is {sex}, {age} years old. "
+                    f"Task Description: Predict whether this patient will develop sepsis in the future based on the current window information of length {str(self.seq_len)}. (The patient's actual data is up to {str(time_finish)}, and the {str(60 - int(time_finish))} hours after this should not be considered.)"
+                    f"The time series information you are currently viewing is from a patient who is {sex}, {age} years old. "
                     f"Variable description: {current_val} {variable_dcb}"
                     f"Input {current_val} statistics in current time window: "
                     f"min value {min_values_str}, "
@@ -289,14 +303,15 @@ class Model(nn.Module):
                 
     
         # prompts에는 B*N개의 원소가 들어가 있음
-        prompt = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids # B*N, prompt_token(문장 별 최대 토큰 수)
-        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # # (B*N, prompt_token, dim(4096)
+        prompt = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids.to('cpu') # B*N, prompt_token(문장 별 최대 토큰 수)
+        self.quantized_llm.to('cpu')
+        prompt_embeddings = self.quantized_llm.get_input_embeddings()(prompt)  # # (B*N, prompt_token, dim(4096)
         prompt_embeddings = prompt_embeddings.view(B, N, prompt_embeddings.size(1), prompt_embeddings.size(2)) # (B, N, prompt_token, dim)
         
         #dimensionality rediction
         prompt_embeddings_unfolded = prompt_embeddings.unfold(dimension=2, size=10, step=4)
         prompt_embeddings_reduced = prompt_embeddings_unfolded.mean(dim=4) # B, N, 56, 4096
-        
+        del prompt_embeddings
         words = self.vocab.split(", ")
 
         def get_word_embedding(word):
@@ -313,9 +328,9 @@ class Model(nn.Module):
 
         word_embeddings = [get_word_embedding(word) for word in words]
         source_embeddings = torch.stack(word_embeddings).to(x_enc.device) #(vocab, 4096)
-        
-        tkn = load_missing_token('Missing_tokens')
-        tokens = tkn.split(", ")
+        del word_embeddings
+        # tkn = load_missing_token('Missing_tokens')
+        # tokens = tkn.split(", ")
 
         def get_missing_tokens(tokens):
             inputs = self.tokenizer(tokens, return_tensors="pt", add_special_tokens=False)
@@ -329,30 +344,30 @@ class Model(nn.Module):
             
             return word_embedding.squeeze()
 
-        Missing_Tokens = [get_missing_tokens(tk) for tk in tokens]
+        Missing_Tokens = [get_missing_tokens('Not measured')]
         MS_Tokens = torch.stack(Missing_Tokens).to(x_enc.device, dtype=torch.float32) #(34,)
-        
+        # del Missing_Tokens
         nan_mask = torch.isnan(x_enc)
         for var_idx in range(x_enc.size(2)):  # 34
-            x_enc[:, :, var_idx][nan_mask[:, :, var_idx]] = MS_Tokens[var_idx]
+            x_enc[:, :, var_idx][nan_mask[:, :, var_idx]] = MS_Tokens[0]
 
-        x_enc = x_enc.reshape(B, N, T).permute(0, 2, 1).contiguous()
+        x_enc = x_enc.permute(0, 2, 1) # B, N, T -> B, T, N
         enc_out = self.reprogramming_layer(x_enc, source_embeddings, source_embeddings) # B, T, N, 4096
-        enc_out = enc_out.reshape(B, N, T, -1).contiguous() # B, N, T, 4096
+        enc_out = enc_out.view(B, N, T, -1) # B, N, T, 4096
+        del x_enc, source_embeddings
+        llama_enc_out = torch.cat([prompt_embeddings_reduced.to(enc_out.device), enc_out], dim=2) # B, N, T+prompt_token, 4096
+        del prompt_embeddings_reduced, enc_out
+        lets_getit = llama_enc_out.view(B, -1, llama_enc_out.shape[-1]) # variable mixing B, N * (T+prompt_token), 4096
         
-        llama_enc_out = torch.cat([prompt_embeddings_reduced, enc_out], dim=2) # B, N, T+prompt_token, 4096
-        
-        lets_getit = llama_enc_out.reshape(B, -1, llama_enc_out.shape[-1]) # variable mixing B, N * (T+prompt_token), 4096
-        
-        dec_out = self.llm_model(inputs_embeds=lets_getit).hidden_states[-1] # B,  N * (T+prompt_token), 4096
+        dec_out = self.quantized_llm(inputs_embeds=lets_getit.to('cpu')).hidden_states[-1] # B,  N * (T+prompt_token), 4096
         dec_out = dec_out[:, :, :self.d_ff] # # B,  N * (T+prompt_token), d_ff
-        del prompt, prompt_, enc_out, source_embeddings
+        del lets_getit
         
         head_nf = self.d_ff * (self.seq_len + prompt_embeddings_reduced.shape[-2])
         
         self.output_projection = ClassificationHead(self.enc_in, head_nf, self.pred_len,
-                                                 head_dropout=0.1).to(x_enc.device)
-        dec_out = self.output_projection(dec_out) # B, pred_window
+                                                 head_dropout=0.1).to(dec_out.device)
+        dec_out = self.output_projection(dec_out.to(enc_out.device)) # B, pred_window
 
         return dec_out
 
@@ -403,3 +418,5 @@ class ReprogrammingLayer(nn.Module):
         reprogramming_embedding = torch.einsum("bhls,she->blhe", A, value_embedding)
 
         return reprogramming_embedding
+    
+    
