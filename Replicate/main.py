@@ -9,6 +9,8 @@ from torch.optim import lr_scheduler
 from tqdm import tqdm
 
 from models import Autoformer, DLinear, TimeLLM, TimeLLM_custom, Get_score
+from sklearn.metrics import precision_score, recall_score ,f1_score, confusion_matrix, roc_auc_score, accuracy_score, classification_report
+
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -59,6 +61,8 @@ if __name__ == '__main__':
     parser.add_argument('--model_comment', type=str, required=True, default='none', help='prefix when saving test results')
     parser.add_argument('--model', type=str, required=True, default='Autoformer',
                         help='model name, options: [Autoformer, DLinear]')
+    parser.add_argument('--mode', type=str, default='Train',
+                        help='Processing options, options:[Train, Valid, Test]')
     parser.add_argument('--seed', type=int, default=2021, help='random seed')
 
     # data loader
@@ -211,100 +215,168 @@ if __name__ == '__main__':
 
         if args.use_amp:
             scaler = torch.amp.GradScaler("cuda")
+        best_loss = 1000
         
-        for epoch in range(args.train_epochs):
-            iter_count = 0
-            train_loss = []
+        if args.mode == 'Trian':
+        
+            for epoch in range(args.train_epochs):
+                iter_count = 0
+                train_loss = []
 
-            model.train()
-            epoch_time = time.time()
-            for i, (batch_x, batch_y, batch_time) in tqdm(enumerate(train_loader)):
-                iter_count += 1
-                model_optim.zero_grad()
+                model.train()
+                epoch_time = time.time()
+                for i, (batch_x, batch_y, batch_time) in tqdm(enumerate(train_loader)):
+                    iter_count += 1
+                    model_optim.zero_grad()
 
-                batch_x = batch_x.bfloat16().to(accelerator.device)
-                batch_y = batch_y.bfloat16().to(accelerator.device)
-                batch_time = batch_time.bfloat16().to(accelerator.device)
-           
-                if args.use_amp:
-                    with torch.amp.autocast('cuda'):
+                    batch_x = batch_x.bfloat16().to(accelerator.device)
+                    batch_y = batch_y.bfloat16().to(accelerator.device)
+                    batch_time = batch_time.bfloat16().to(accelerator.device)
+            
+                    if args.use_amp:
+                        with torch.amp.autocast('cuda'):
+                            if args.output_attention:
+                                outputs = model(batch_x, batch_time)[0]
+                            else:
+                                outputs = model(batch_x, batch_time)
+
+                            loss = criterion(outputs, batch_y.to(accelerator.device))
+                            train_loss.append(loss.item())
+                    else:
                         if args.output_attention:
                             outputs = model(batch_x, batch_time)[0]
                         else:
                             outputs = model(batch_x, batch_time)
 
-                        loss = criterion(outputs, batch_y.to(accelerator.device))
+                        loss = criterion(outputs, batch_y)
                         train_loss.append(loss.item())
-                else:
-                    if args.output_attention:
-                        outputs = model(batch_x, batch_time)[0]
-                    else:
-                        outputs = model(batch_x, batch_time)
+                        
+                    if (i + 1) % (epoch+1) == 0:
+                        accelerator.print(
+                            "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
+                        speed = (time.time() - time_now) / iter_count
+                        left_time = speed * ((args.train_epochs - epoch - 1) * train_steps)
+                        accelerator.print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
+                        iter_count = 0
+                        time_now = time.time()
+        
+                    accelerator.backward(loss)
+                    model_optim.step()
 
-                    loss = criterion(outputs, batch_y)
-                    train_loss.append(loss.item())
+                    if args.lradj == 'TST':
+                        adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=False)
+                        scheduler.step()
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    
+                    
                 
-    
-                accelerator.backward(loss)
-                model_optim.step()
+                accelerator.print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
+                train_loss = np.average(train_loss)
+                vali_loss = vali(args, accelerator, model, vali_data, vali_loader, criterion)
+                # test_loss = vali(args, accelerator, model, test_data, test_loader, criterion)
+                accelerator.print(
+                    "Epoch: {0} | Train Loss: {1:.7f} Vali Loss: {2:.7f} ".format(
+                        epoch + 1, train_loss, vali_loss))
+                # accelerator.print(
+                #     "Epoch: {0} | Train Loss: {1:.7f}".format(
+                #         epoch + 1, train_loss))
+                if best_loss > vali_loss:
+                    print('you are going to heaven')
+                    model_to_save = accelerator.unwrap_model(model)
+                    save_path = os.path.join(checkpoint_dir, f"Best_model_epoch_{epoch + 1}_loss-{vali_loss}.pt")
 
-                if args.lradj == 'TST':
-                    adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=False)
-                    scheduler.step()
-                gc.collect()
-                torch.cuda.empty_cache()
-            accelerator.print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
-            train_loss = np.average(train_loss)
-            vali_loss, vali_mae_loss = vali(args, accelerator, model, vali_data, vali_loader, criterion)
-            # test_loss, test_mae_loss = vali(args, accelerator, model, test_data, test_loader, criterion)
-            accelerator.print(
-                "Epoch: {0} | Train Loss: {1:.7f} Vali Loss: {2:.7f} ".format(
-                    epoch + 1, train_loss, vali_loss))
-            # accelerator.print(
-            #     "Epoch: {0} | Train Loss: {1:.7f}".format(
-            #         epoch + 1, train_loss))
+                    accelerator.wait_for_everyone()  # 모든 프로세스가 동기화되도록 기다립니다.
+                    if accelerator.is_local_main_process:  # 로컬 주 프로세스만 저장을 수행합니다.
+                        torch.save({
+                            'epoch': epoch + 1,
+                            'model_state_dict': model_to_save.state_dict(),
+                            'optimizer_state_dict': model_optim.state_dict(),
+                            'loss': train_loss,
+                        }, save_path)
+                        best_loss = vali_loss
+                        accelerator.print(f"Model saved to {save_path}")
+                early_stopping(vali_loss, model, path)
+                if early_stopping.early_stop:
+                    accelerator.print("Early stopping")
+                    break
 
-            early_stopping(vali_loss, model, path)
-            if early_stopping.early_stop:
-                accelerator.print("Early stopping")
-                break
-
-            if args.lradj != 'TST':
-                if args.lradj == 'COS':
-                    scheduler.step()
-                    accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
-                else:
-                    if epoch == 0:
-                        args.learning_rate = model_optim.param_groups[0]['lr']
+                if args.lradj != 'TST':
+                    if args.lradj == 'COS':
+                        scheduler.step()
                         accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
-                    adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=True)
+                    else:
+                        if epoch == 0:
+                            args.learning_rate = model_optim.param_groups[0]['lr']
+                            accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
+                        adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=True)
 
-            else:
-                accelerator.print('Updating learning rate to {}'.format(scheduler.get_last_lr()[0]))
-            
-            
-            # if (i + 1) % (epoch+1) == 0:
-            #     accelerator.print(
-            #         "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
-            #     speed = (time.time() - time_now) / iter_count
-            #     left_time = speed * ((args.train_epochs - epoch - 1) * train_steps)
-            #     accelerator.print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
-            #     iter_count = 0
-            #     time_now = time.time()
+                else:
+                    accelerator.print('Updating learning rate to {}'.format(scheduler.get_last_lr()[0]))
                 
-    if accelerator.is_main_process:
-        model_to_save = accelerator.unwrap_model(model)
-        save_path = os.path.join(checkpoint_dir, f"Customizing0731{epoch + 1}.pt")
-        torch.save({
-            'epoch': epoch + 1,
-            'model_state_dict': model_to_save.state_dict(),
-            'optimizer_state_dict': model_optim.state_dict(),
-            'loss': train_loss,
-        }, save_path)
-        accelerator.print(f"Model saved to {save_path}")
+                    
+            if accelerator.is_main_process:
+                model_to_save = accelerator.unwrap_model(model)
+                save_path = os.path.join(checkpoint_dir, f"Final_model_full_epoch{epoch + 1}.pt")
+                torch.save({
+                    'epoch': epoch + 1,
+                    'model_state_dict': model_to_save.state_dict(),
+                    'optimizer_state_dict': model_optim.state_dict(),
+                    'loss': train_loss,
+                }, save_path)
+                accelerator.print(f"Model saved to {save_path}")
 
-    accelerator.wait_for_everyone()
-    if accelerator.is_local_main_process:
-        path = './checkpoints'  # unique checkpoint saving path
-        del_files(path)  # delete checkpoint files
-        accelerator.print('success delete checkpoints')
+            accelerator.wait_for_everyone()
+            if accelerator.is_local_main_process:
+                path = './checkpoints'  # unique checkpoint saving path
+                del_files(path)  # delete checkpoint files
+                accelerator.print('success delete checkpoints')
+        
+        elif args.mode == 'Valid':
+            print('Validation start')
+            # checkpoint = torch.load('/home/DAHS2/Timellm/Replicate/scripts/model_checkpoint/Best_model_epoch_9_loss-0.9002305708135392.pt')
+            # model.load_state_dict(checkpoint)
+            
+            model_path = '/home/DAHS2/Timellm/Replicate/scripts/model_checkpoint/Best_model_epoch_9_loss-0.9002305708135392.pt'
+            
+            model.load_state_dict(torch.load(model_path))
+                
+            predictions = []
+            labels = []
+            # total_mae_loss = []
+            model.eval()
+            with torch.no_grad():
+                for i, (batch_x, batch_y, batch_time) in tqdm(enumerate(vali_loader)):
+                    batch_x = batch_x.bfloat16().to(accelerator.device)
+                    batch_y = batch_y.bfloat16().to(accelerator.device)
+                    batch_time = batch_time.bfloat16().to(accelerator.device)
+
+                    if args.use_amp:
+                        with torch.amp.autocast('cuda'):
+                            if args.output_attention:
+                                outputs = model(batch_x, batch_time)[0]
+                            else:
+                                outputs = model(batch_x, batch_time)
+
+                    outputs, batch_y = accelerator.gather_for_metrics((outputs, batch_y))
+
+                    predictions.extend(outputs.detach().cpu().numpy())
+                    labels.extend(batch_y.detach().cpu().numpy())
+
+
+            print("Start Evaluation....")
+            accuracy = accuracy_score(labels, labels)
+            precision = precision_score(labels, labels)
+            recall = recall_score(labels, labels)
+            f1 = f1_score(labels, labels)
+            conf_matrix = confusion_matrix(labels, labels)
+            class_report = classification_report(labels, labels)
+
+            print(f'Accuracy: {accuracy:.4f}')
+            print(f'Precision: {precision:.4f}')
+            print(f'Recall: {recall:.4f}')
+            print(f'F1-score: {f1:.4f}')
+            print('Confusion Matrix:')
+            print(conf_matrix)
+            print('Classification Report:')
+            print(class_report)

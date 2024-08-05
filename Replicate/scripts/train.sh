@@ -130,13 +130,13 @@ export TOKENIZERS_PARALLELISM=false
 export CUDA_VISIBLE_DEVICES=0,1
 
 model_name=TimeLLM-Shock
-train_epochs=100
-learning_rate=0.001
+train_epochs=300
+learning_rate=0.0001
 llama_layers=16
 
 master_port=0
 num_process=2
-batch_size=32
+batch_size=16
 d_model=16
 d_ff=16
 
@@ -150,9 +150,11 @@ accelerate launch --config_file /home/DAHS2/.cache/huggingface/accelerate/defaul
   --trn_split_path HiRID_shock_10min_trn_toy.csv.gz \
   --vld_split_path HiRID_shock_10min_vld_toy.csv.gz \
   --tst_split_path HiRID_shock_10min_tst_toy.csv.gz \
+  --mode Valid \
   --model_id shock_10 \
   --model $model_name \
   --data hirid \
+  --lradj COS \
   --seq_len 10 \
   --label_len 1 \
   --pred_len 1 \

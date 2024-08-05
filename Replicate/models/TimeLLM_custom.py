@@ -223,7 +223,7 @@ class Model(nn.Module):
         # self.num_tokens = 5
         # self.mapping_layer = nn.Linear(self.vocab_size, self.num_tokens)
 
-        self.reprogramming_layer = ReprogrammingLayer(configs.d_model, configs.n_heads, self.d_ff, self.d_llm)
+        self.reprogramming_layer = ReprogrammingLayer(configs.seq_len, configs.n_heads, None, self.d_llm)
 
         self.patch_nums = int((configs.seq_len - self.patch_len) / self.stride + 2)
         self.head_nf = self.d_ff * self.patch_nums
@@ -275,10 +275,10 @@ class Model(nn.Module):
             batch_data = x_enc[i]  # (T, N)
             batch_time = time[i]
             # 각 변수에 대해 통계값 계산
-            min_values = torch.min(batch_data, dim=0)[0]
-            max_values = torch.max(batch_data, dim=0)[0]
-            medians = torch.median(batch_data, dim=0).values
-            trends = batch_data.diff(dim=0).sum(dim=0)
+            # min_values = torch.min(batch_data, dim=0)[0]
+            # max_values = torch.max(batch_data, dim=0)[0]
+            # medians = torch.median(batch_data, dim=0).values
+            # trends = batch_data.diff(dim=0).sum(dim=0)
             time_start = str(batch_time[0].item())
             time_finish = str(batch_time[-1].item())
             
@@ -313,22 +313,22 @@ class Model(nn.Module):
                         sex = 'Female'
                     variable_dcb = load_variable_content(current_val)
                         
-                    min_values_str = str(min_values[j].item())
+                    # min_values_str = str(min_values[j].item())
                     
-                    if min_values_str == 'nan':
-                        min_values_str = 'Not measured'
-                    max_values_str = str(max_values[j].item())
+                    # if min_values_str == 'nan':
+                    #     min_values_str = 'Not measured'
+                    # max_values_str = str(max_values[j].item())
                     
-                    if max_values_str == 'nan':
-                        max_values_str = 'Not measured'
-                    median_values_str = str(medians[j].item())
+                    # if max_values_str == 'nan':
+                    #     max_values_str = 'Not measured'
+                    # median_values_str = str(medians[j].item())
                     
-                    if median_values_str == 'nan':
-                        median_values_str = 'Not measured'
+                    # if median_values_str == 'nan':
+                    #     median_values_str = 'Not measured'
                         
-                    trend_str = 'upward' if trends[j] > 0 else 'downward'
-                    if trend_str == 'nan':
-                        trend_str = 'Not measured'
+                    # trend_str = 'upward' if trends[j] > 0 else 'downward'
+                    # if trend_str == 'nan':
+                    #     trend_str = 'Not measured'
                     
                     last_value = 'Not measured'
                     corresponding_time = 'Not measured'
@@ -348,12 +348,13 @@ class Model(nn.Module):
                         f"The time series information(Time window unit start point is {time_start} minutes from ICU admission and end point is {time_finish} minutes) you are currently viewing is from a patient who is {sex}, {age} years old. This patient's height is {height_str} cm and weight is {weight_str} kg. "
                         f"Variable description: {variable_dcb}"
                         f"Input {current_val} statistics in current time window: "
-                        f"min value of {current_val} in the batch sequence is {min_values_str}, "
-                        f"max value of {current_val} in the batch sequence is {max_values_str}, "
-                        f"median value of {current_val} in the batch sequence is {median_values_str}, "
-                        f"the trend of {current_val} in the batch sequence is {trend_str}, "
                         f"In the current window, the last measurement value of variable {current_val} is {last_value}, and the measurement time is {corresponding_time} minutes after ICU admission.<|<end_prompt>|> "
                     )
+                    
+                    # f"min value of {current_val} in the batch sequence is {min_values_str}, "
+                    #     f"max value of {current_val} in the batch sequence is {max_values_str}, "
+                    #     f"median value of {current_val} in the batch sequence is {median_values_str}, "
+                    #     f"the trend of {current_val} in the batch sequence is {trend_str}, "
                     
                     prompts.append(prompt_)
                 
@@ -365,7 +366,7 @@ class Model(nn.Module):
         prompt_embeddings = prompt_embeddings.view(B, N-len(variable_pass), prompt_embeddings.size(1), prompt_embeddings.size(2)) # (B, N-len(variable_pass), prompt_token, dim)
         
         #dimensionality rediction
-        prompt_embeddings_unfolded = prompt_embeddings.unfold(dimension=2, size=20, step=8)
+        prompt_embeddings_unfolded = prompt_embeddings.unfold(dimension=2, size=20, step=4)
         prompt_embeddings_reduced = prompt_embeddings_unfolded.mean(dim=4) # B, N-variable pass, 56, 4096
         
         words = self.vocab.split(", ")
@@ -417,8 +418,8 @@ class Model(nn.Module):
         filtered_tensor = x_enc[:, :, include_indices]
         filtered_tensor = filtered_tensor.permute(0, 2, 1).contiguous().to(dtype=torch.bfloat16)
         
-        enc_out, n_vars = self.patch_embedding(filtered_tensor) # B, (N-variable pass), patch_num, patch_len : patch 하나가 patch len 만큼 임베딩 됨
-        enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings) # B, (N-variable pass), patch_num, 4096
+        # enc_out, n_vars = self.patch_embedding(filtered_tensor) # B, (N-variable pass), patch_num, patch_len : patch 하나가 patch len 만큼 임베딩 됨
+        enc_out = self.reprogramming_layer(filtered_tensor, source_embeddings, source_embeddings) # B, (N-variable pass), patch_num -> seq len, 4096
         # enc_out = enc_out.to(dtype = torch.float32)
         # prompt_embeddings = prompt_embeddings.to(dtype = torch.float32)
         llama_enc_out = torch.cat([prompt_embeddings_reduced, enc_out], dim=2) # B, (N-variable pass), patch_num+prompt_token, 4096
@@ -429,7 +430,7 @@ class Model(nn.Module):
         dec_out = dec_out[:, :, :self.d_ff] # # B,  N * (patch_num+prompt_token), d_ff
         del prompt, prompt_, enc_out, source_embeddings
         
-        head_nf = self.d_ff * (self.patch_nums + prompt_embeddings_reduced.shape[-2])
+        head_nf = self.d_ff * (self.seq_len + prompt_embeddings_reduced.shape[-2])
         
         self.output_projection = ClassificationHead(self.enc_in-len(variable_pass), head_nf, self.pred_len,
                                                  head_dropout=0.1).to(filtered_tensor.device)
@@ -453,12 +454,12 @@ class ReprogrammingLayer(nn.Module):
         self.dropout = nn.Dropout(attention_dropout)
 
     def forward(self, target_embedding, source_embedding, value_embedding):
-        B, N, L, _ = target_embedding.shape
+        B, N, L = target_embedding.shape
         S, _ = source_embedding.shape
         H = self.n_heads
 
         # Flatten B and N dimensions for processing
-        target_embedding = target_embedding.view(B * N, L, -1)
+        target_embedding = target_embedding.view(B * N, L)
         
         # Apply projections
         target_embedding = self.query_projection(target_embedding).view(B * N, L, H, -1)
@@ -469,7 +470,8 @@ class ReprogrammingLayer(nn.Module):
         out = self.reprogramming(target_embedding, source_embedding, value_embedding)
 
         # Reshape back to (B, N, L, d_llm)
-        out = out.view(B, N, L, -1)
+        out = out.reshape(B, N, L, -1)
+        # attention_scores = attention_scores.view(B, N, H, L, S)
 
         return self.out_projection(out)
 
