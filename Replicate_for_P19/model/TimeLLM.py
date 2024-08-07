@@ -31,33 +31,20 @@ import torch.nn as nn
 class ClassificationHead(nn.Module):
     def __init__(self, n_vars, nf, target_window, head_dropout=0):
         super().__init__()
-        dimensionality_reduct = int(nf *n_vars / 4)
-        self.window = target_window
         self.n_vars = n_vars
         self.flatten = nn.Flatten(start_dim=-2)
-        self.linear_1 = nn.Linear(nf * n_vars , dimensionality_reduct)
-        self.linear_2 = nn.Linear(dimensionality_reduct, target_window)
-        
-        self.batch_norm1 = nn.BatchNorm1d(nf * n_vars)
-        self.batch_norm2 = nn.BatchNorm1d(target_window)
-        
+        self.linear_1 = nn.Linear(nf * n_vars , target_window)
         self.dropout = nn.Dropout(head_dropout)
-        self.sigmoid = nn.Sigmoid()
-        self.relu = nn.ReLU()
         
         nn.init.xavier_uniform_(self.linear_1.weight)
-        nn.init.xavier_uniform_(self.linear_2.weight)
-
+        
     def forward(self, x):
         
-        x = self.flatten(x) # B, N * dim * T
+        x = self.flatten(x) # B, N * (prompt_token + seq len) * d_ff
         x = self.linear_1(x)
-        x = self.batch_norm1(x)
-        x = self.linear_2(x)
+        x = self.dropout(x)
         
         return x
-
-
 
 class Model(nn.Module):
 
@@ -75,7 +62,7 @@ class Model(nn.Module):
             self.llama_config.num_hidden_layers = configs.llm_layers
             self.llama_config.output_attentions = True
             self.llama_config.output_hidden_states = True
-            self.llama_config.hidden_size = 1024
+            # self.llama_config.hidden_size = 512
             try:
                 self.llm_model = AutoModelForCausalLM.from_pretrained(
                     # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/",
@@ -85,10 +72,10 @@ class Model(nn.Module):
                     config=self.llama_config,
                     ignore_mismatched_sizes=True
                     # load_in_4bit=True,
-                ).to('cpu')
-                self.quantized_llm = torch.quantization.quantize_dynamic(
-                    self.llm_model, {torch.nn.Linear}, dtype=torch.qint8
                 )
+                # self.quantized_llm = torch.quantization.quantize_dynamic(
+                #     self.llm_model, {torch.nn.Linear}, dtype=torch.qint8
+                # )
             except EnvironmentError:  # downloads model from HF is not already done
                 print("Local model files not found. Attempting to download...")
                 self.llm_model = AutoModelForCausalLM.from_pretrained(
@@ -203,8 +190,8 @@ class Model(nn.Module):
         for param in self.llm_model.parameters():
             param.requires_grad = False
             
-        for param in self.quantized_llm.parameters():
-            param.requires_grad = False
+        # for param in self.quantized_llm.parameters():
+        #     param.requires_grad = False
 
         if configs.prompt_domain:
             self.description = 'Sepsis'
@@ -290,7 +277,7 @@ class Model(nn.Module):
                 prompt_ = (
                     f"<|start_prompt|>Domain description: {domain_dcb}"
                     f"Task Description: Predict whether this patient will develop sepsis in the future based on the current window information of length {str(self.seq_len)}. (The patient's actual data is up to {str(time_finish)}, and the {str(60 - int(time_finish))} hours after this should not be considered.)"
-                    f"The time series information you are currently viewing is from a patient who is {sex}, {age} years old. "
+                    f"The time series information you are currently viewing is from a patient who is {sex}, {age} years old, and admitted in {icu}"
                     f"Variable description: {current_val} {variable_dcb}"
                     f"Input {current_val} statistics in current time window: "
                     f"min value {min_values_str}, "
@@ -301,17 +288,19 @@ class Model(nn.Module):
                 
                 prompts.append(prompt_)
                 
-    
+        
         # prompts에는 B*N개의 원소가 들어가 있음
-        prompt = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids.to('cpu') # B*N, prompt_token(문장 별 최대 토큰 수)
-        self.quantized_llm.to('cpu')
-        prompt_embeddings = self.quantized_llm.get_input_embeddings()(prompt)  # # (B*N, prompt_token, dim(4096)
-        prompt_embeddings = prompt_embeddings.view(B, N, prompt_embeddings.size(1), prompt_embeddings.size(2)) # (B, N, prompt_token, dim)
+        prompt = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids # B*N, prompt_token(문장 별 최대 토큰 수)
+        # self.quantized_llm.to('cpu')
+        # self.quantized_llm.eval()
+        with torch.no_grad():
+            prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # # (B*N, prompt_token, dim(4096)
+        prompt_embeddings = prompt_embeddings.reshape(B, N, prompt_embeddings.size(1), prompt_embeddings.size(2)) # (B, N, prompt_token, dim)
         
         #dimensionality rediction
         prompt_embeddings_unfolded = prompt_embeddings.unfold(dimension=2, size=10, step=4)
         prompt_embeddings_reduced = prompt_embeddings_unfolded.mean(dim=4) # B, N, 56, 4096
-        del prompt_embeddings
+
         words = self.vocab.split(", ")
 
         def get_word_embedding(word):
@@ -329,8 +318,8 @@ class Model(nn.Module):
         word_embeddings = [get_word_embedding(word) for word in words]
         source_embeddings = torch.stack(word_embeddings).to(x_enc.device) #(vocab, 4096)
         del word_embeddings
-        # tkn = load_missing_token('Missing_tokens')
-        # tokens = tkn.split(", ")
+        tkn = load_missing_token('Missing_tokens')
+        tokens = tkn.split(", ")
 
         def get_missing_tokens(tokens):
             inputs = self.tokenizer(tokens, return_tensors="pt", add_special_tokens=False)
@@ -344,30 +333,67 @@ class Model(nn.Module):
             
             return word_embedding.squeeze()
 
-        Missing_Tokens = [get_missing_tokens('Not measured')]
+        Missing_Tokens = [get_missing_tokens(tk) for tk in tokens]
         MS_Tokens = torch.stack(Missing_Tokens).to(x_enc.device, dtype=torch.float32) #(34,)
-        # del Missing_Tokens
+        
+        del Missing_Tokens
         nan_mask = torch.isnan(x_enc)
         for var_idx in range(x_enc.size(2)):  # 34
-            x_enc[:, :, var_idx][nan_mask[:, :, var_idx]] = MS_Tokens[0]
+            x_enc[:, :, var_idx][nan_mask[:, :, var_idx]] = MS_Tokens[var_idx]
 
-        x_enc = x_enc.permute(0, 2, 1) # B, N, T -> B, T, N
-        enc_out = self.reprogramming_layer(x_enc, source_embeddings, source_embeddings) # B, T, N, 4096
-        enc_out = enc_out.view(B, N, T, -1) # B, N, T, 4096
-        del x_enc, source_embeddings
-        llama_enc_out = torch.cat([prompt_embeddings_reduced.to(enc_out.device), enc_out], dim=2) # B, N, T+prompt_token, 4096
-        del prompt_embeddings_reduced, enc_out
-        lets_getit = llama_enc_out.view(B, -1, llama_enc_out.shape[-1]) # variable mixing B, N * (T+prompt_token), 4096
+        x_enc = x_enc.permute(0, 2, 1) # B, T, N -> B, N, T
         
-        dec_out = self.quantized_llm(inputs_embeds=lets_getit.to('cpu')).hidden_states[-1] # B,  N * (T+prompt_token), 4096
-        dec_out = dec_out[:, :, :self.d_ff] # # B,  N * (T+prompt_token), d_ff
-        del lets_getit
+        # 평균과 표준편차 계산 (특징 차원 N에 대해 계산)
+        mean = x_enc.mean(dim=2, keepdim=True)
+        std = x_enc.std(dim=2, keepdim=True)
+
+        # 노말 정규화
+        x_enc = (x_enc - mean) / std
+        
+        enc_out = self.reprogramming_layer(x_enc, source_embeddings, source_embeddings) # B, T, N, 4096
+        del source_embeddings
+        llama_enc_out = torch.cat([prompt_embeddings_reduced.to(enc_out.device), enc_out.reshape(B, N, T, -1)], dim=2) # B, N, T+prompt_token, 4096
+        del enc_out
+        # lets_getit = llama_enc_out.reshape(B, -1, llama_enc_out.shape[-1]) # variable mixing B, N * (T+prompt_token), 4096
+        # with torch.no_grad():
+        #     dec_out = self.llm_model(inputs_embeds=lets_getit).hidden_states[-1] # B,  N * (T+prompt_token), 4096
+        # dec_out = dec_out[:, :, :self.d_ff] # # B,  N * (T+prompt_token), d_ff
+        # del lets_getit
+        
+    
+        # dec_out = []
+
+        # for b in range(B):
+        #     # (N, T+P, 4096)
+        #     for n in range(N):
+        #         input_tensor = llama_enc_out[b, n, :, :].unsqueeze(0) #(N, T+P, 4096)
+        #         with torch.no_grad():
+        #             out = self.llm_model(inputs_embeds=input_tensor).hidden_states[-1]
+        #             dec_out.append(out.squeeze(0).squeeze(0))  
+
+        # dec_out = torch.stack(dec_out, dim=0) 
+        # dec_out.reshape(B, N, dec_out.shape[-2], -1) # (B, N, T+P, 4096)
+        # dec_out = dec_out.reshape(B, -1, llama_enc_out.shape[-1])
+        # dec_out = dec_out[:, :, :self.d_ff]
+        
+        B, N, T_plus_P, embedding_dim = llama_enc_out.shape
+
+        # llama_enc_out의 shape를 (B*N, T+P, 4096)으로 변경하여 배치로 처리
+        input_tensor = llama_enc_out.view(B * N, T_plus_P, embedding_dim)
+
+        with torch.no_grad():
+            out = self.llm_model(inputs_embeds=input_tensor).hidden_states[-1]
+
+        # -> (B, N, T+P, 4096)
+        dec_out = out.view(B, N, T_plus_P, embedding_dim)
+        dec_out = dec_out.reshape(B, -1, llama_enc_out.shape[-1])
+        dec_out = dec_out[:, :, :self.d_ff]
         
         head_nf = self.d_ff * (self.seq_len + prompt_embeddings_reduced.shape[-2])
         
         self.output_projection = ClassificationHead(self.enc_in, head_nf, self.pred_len,
-                                                 head_dropout=0.1).to(dec_out.device)
-        dec_out = self.output_projection(dec_out.to(enc_out.device)) # B, pred_window
+                                                 head_dropout=0.1).to(x_enc.device)
+        dec_out = self.output_projection(dec_out.to(x_enc.device)) # B, pred_window
 
         return dec_out
 
@@ -391,7 +417,7 @@ class ReprogrammingLayer(nn.Module):
         H = self.n_heads
 
         # Flatten B and N dimensions for processing
-        target_embedding = target_embedding.view(B * N, L)
+        target_embedding = target_embedding.reshape(B * N, L)
         
         # Apply projections
         target_embedding = self.query_projection(target_embedding).view(B * N, L, H, -1)

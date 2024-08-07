@@ -90,6 +90,7 @@ if __name__ == '__main__':
     parser.add_argument('--outcomes_path', type=str, default='dataset/data/processed_data/arr_outcomes_6.npy', help='dataset-outcomes file')
     parser.add_argument('--split_num', type=int, default=1, help='cross validation set')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
+    parser.add_argument('--undersampling', action='store_true', help='whether random under sampling', default=True)
 
     # forecasting task
     parser.add_argument('--seq_len', type=int, default=60, help='input sequence length')
@@ -104,7 +105,7 @@ if __name__ == '__main__':
     parser.add_argument('--prompt_domain', type=str, default='Sepsis', help='Task domain')
     parser.add_argument('--output_attention', action='store_true', help='whether to output attention in encoder')
     parser.add_argument('--llm_model', type=str, default='LLAMA', help='LLM model') # LLAMA, GPT2, BERT
-    parser.add_argument('--llm_dim', type=int, default='1024', help='LLM model dimension')# LLama7b:4096; GPT2-small:768; BERT-base:768
+    parser.add_argument('--llm_dim', type=int, default='4096', help='LLM model dimension')# LLama7b:4096; GPT2-small:768; BERT-base:768
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=2, help='data loader num workers')
@@ -247,9 +248,9 @@ if __name__ == '__main__':
                         iter_count = 0
                         time_now = time.time()
 
-                    if args.lradj == 'TST':
-                        adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=False)
-                        scheduler.step()
+                    # if args.lradj == 'TST':
+                    #     adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=False)
+                    #     scheduler.step()
                     gc.collect()
                     torch.cuda.empty_cache()
                     
@@ -281,18 +282,18 @@ if __name__ == '__main__':
                     accelerator.print("Early stopping")
                     break
 
-                if args.lradj != 'TST':
-                    if args.lradj == 'COS':
-                        scheduler.step()
-                        accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
-                    else:
-                        if epoch == 0:
-                            args.learning_rate = model_optim.param_groups[0]['lr']
-                            accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
-                        adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=True)
+                # if args.lradj != 'TST':
+                #     if args.lradj == 'COS':
+                #         scheduler.step()
+                #         accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
+                #     else:
+                #         if epoch == 0:
+                #             args.learning_rate = model_optim.param_groups[0]['lr']
+                #             accelerator.print("lr = {:.10f}".format(model_optim.param_groups[0]['lr']))
+                #         adjust_learning_rate(accelerator, model_optim, scheduler, epoch + 1, args, printout=True)
 
-                else:
-                    accelerator.print('Updating learning rate to {}'.format(scheduler.get_last_lr()[0]))
+                # else:
+                #     accelerator.print('Updating learning rate to {}'.format(scheduler.get_last_lr()[0]))
                 
                     
             if accelerator.is_main_process:

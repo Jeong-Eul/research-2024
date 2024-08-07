@@ -2,13 +2,13 @@ export TOKENIZERS_PARALLELISM=false
 export CUDA_VISIBLE_DEVICES=0,1
 
 model_name=TimeLLM
-train_epochs=300
-learning_rate=0.001
+train_epochs=20
+learning_rate=0.00001
 llama_layers=16
 
 master_port=0
 num_process=2
-batch_size=1
+batch_size=8
 d_model=16
 d_ff=16
 

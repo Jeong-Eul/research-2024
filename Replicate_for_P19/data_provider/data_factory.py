@@ -1,5 +1,5 @@
 from torch.utils.data import DataLoader
-from data_provider.data_loader import P19Datasaets
+from data_provider.data_loader import P19Datasaets, P19DatasaetsDownSampled
 import numpy as np
 
 
@@ -9,6 +9,7 @@ data_dict = {
 }
 
 def P19_DataLoader(args, data, flag='Train'):
+    
     Data = data_dict[data]
     
     split_idx = args.split_num # set this parameter as argment parameter
@@ -29,6 +30,8 @@ def P19_DataLoader(args, data, flag='Train'):
         splited_dataset = idx_val
         
     else:
+        if args.undersampling:
+            Data = P19DatasaetsDownSampled
         shuffle_flag = False
         drop_last = True
         batch_size = args.batch_size
