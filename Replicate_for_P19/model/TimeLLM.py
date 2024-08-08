@@ -340,15 +340,22 @@ class Model(nn.Module):
         nan_mask = torch.isnan(x_enc)
         for var_idx in range(x_enc.size(2)):  # 34
             x_enc[:, :, var_idx][nan_mask[:, :, var_idx]] = MS_Tokens[var_idx]
-
+            
         x_enc = x_enc.permute(0, 2, 1) # B, T, N -> B, N, T
-        
-        # 평균과 표준편차 계산 (특징 차원 N에 대해 계산)
-        mean = x_enc.mean(dim=2, keepdim=True)
-        std = x_enc.std(dim=2, keepdim=True)
+            
+        paddings = self.tokenizer('padding', return_tensors="pt", add_special_tokens=False)
+        padding_ids = paddings['input_ids']
+        padding_value = self.embedding_layers(torch.tensor(padding_ids).to(x_enc.device)).mean(dim=1).mean(dim=1)
 
-        # 노말 정규화
-        x_enc = (x_enc - mean) / std
+        for i in range(B):
+            x_enc[i, :, real_time[i]:] = padding_value
+              
+        # # 평균과 표준편차 계산 (특징 차원 N에 대해 계산)
+        # mean = x_enc.mean(dim=2, keepdim=True)
+        # std = x_enc.std(dim=2, keepdim=True)
+
+        # # 노말 정규화
+        # x_enc = (x_enc - mean) / std
         
         enc_out = self.reprogramming_layer(x_enc, source_embeddings, source_embeddings) # B, T, N, 4096
         del source_embeddings
