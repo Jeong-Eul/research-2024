@@ -76,21 +76,21 @@ class P19DatasaetsDownSampled(Dataset):
         
         label_0_indices = np.where(self.Pdata_label == 0)[0]
         np.random.seed(42) 
-        downsampled_indices = np.random.choice(label_0_indices, 10000, replace=False)
+        downsampled_indices = np.random.choice(label_0_indices, len(np.where(self.Pdata_label == 1)[0]), replace=False)
         
         Ptrain_downsampled = self.Pdata[downsampled_indices]
         Ptrain_label_downsampled = self.Pdata_label[downsampled_indices]
 
         label_1_indices = np.where(self.Pdata_label == 1)[0]
-        label_1_count = len(label_1_indices)
-        oversample_count = 10000 - label_1_count
-        oversampled_indices = np.random.choice(label_1_indices, oversample_count, replace=True)
+        # label_1_count = len(label_1_indices)
+        # oversample_count = len(np.where(self.Pdata_label == 1)[0]) - label_1_count
+        # oversampled_indices = np.random.choice(label_1_indices, oversample_count, replace=True)
 
-        Ptrain_oversampled = self.Pdata[oversampled_indices]
-        Ptrain_label_oversampled = self.Pdata_label[oversampled_indices]
+        # Ptrain_oversampled = self.Pdata[oversampled_indices]
+        # Ptrain_label_oversampled = self.Pdata_label[oversampled_indices]
 
-        Ptrain_final = np.concatenate((Ptrain_downsampled, self.Pdata[label_1_indices], Ptrain_oversampled), axis=0)
-        Ptrain_label_final = np.concatenate((Ptrain_label_downsampled, self.Pdata_label[label_1_indices], Ptrain_label_oversampled), axis=0)
+        Ptrain_final = np.concatenate((Ptrain_downsampled, self.Pdata[label_1_indices]), axis=0)
+        Ptrain_label_final = np.concatenate((Ptrain_label_downsampled, self.Pdata_label[label_1_indices]), axis=0)
 
         shuffle_indices = np.random.permutation(len(Ptrain_final))
         self.Ptrain_final = Ptrain_final[shuffle_indices]

@@ -3,12 +3,12 @@ export CUDA_VISIBLE_DEVICES=0,1
 
 model_name=TimeLLM
 train_epochs=20
-learning_rate=0.00001
+learning_rate=0.000000001
 llama_layers=16
 
 master_port=0
 num_process=2
-batch_size=8
+batch_size=4
 d_model=16
 d_ff=16
 
@@ -24,7 +24,7 @@ accelerate launch --config_file /home/DAHS2/.cache/huggingface/accelerate/defaul
   --model_id Sepsis \
   --model $model_name \
   --data P19 \
-  --lradj COS \
+  --lradj PEMS \
   --seq_len 60 \
   --pred_len 1 \
   --n_heads 1 \
