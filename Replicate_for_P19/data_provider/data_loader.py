@@ -232,6 +232,97 @@ class P19DatasaetsUpSampled(Dataset):
         return self.tot_len
     
 
+
+class P19Visualization(Dataset):
+    def __init__(self, idx_dataset, 
+                 root_path = '/home/DAHS2/Timellm/Replicate_for_P19/',
+                 PT_dict_path='dataset/data/processed_data/PT_dict_list_6.npy', 
+                 outcomes_path = 'dataset/data/processed_data/arr_outcomes_6.npy'):
+
+        # init
+        self.split_id = idx_dataset #sample id set [Train, Valid, Test]
+        self.seq_len = 60
+        self.root_path = root_path
+        self.outcomes_path = outcomes_path
+        self.PT_dict_path = PT_dict_path
+        self.tot_len = self.__read_data__()
+        self.slide_unit = 1
+
+        # self.tot_len = 100
+
+    def __read_data__(self):
+        
+        Pdict_list = np.load(self.root_path + self.PT_dict_path, allow_pickle=True)
+        arr_outcomes = np.load(self.root_path + self.outcomes_path, allow_pickle=True)
+        
+        self.Pdata = Pdict_list[self.split_id]
+        self.Pdata_label = arr_outcomes[self.split_id]
+        
+        # length가 40 이상인 샘플들만 선택
+        valid_indices = [i for i in range(len(self.Pdata)) if self.Pdata[i]['length'] >= 40]
+
+        # 유효한 샘플들로 데이터와 라벨을 필터링
+        self.Pdata = self.Pdata[valid_indices]
+        self.Pdata_label = self.Pdata_label[valid_indices]
+
+        # 라벨 0과 라벨 1의 인덱스를 추출
+        label_0_indices = np.where(self.Pdata_label == 0)[0]
+        label_1_indices = np.where(self.Pdata_label == 1)[0]
+
+        # 각각의 샘플 개수와 max_samples 중 작은 값을 선택
+        num_label_0 = min(len(label_0_indices), 1000)
+        num_label_1 = min(len(label_1_indices), 1000)
+
+        # 라벨 0과 1에서 각각 최대 num_label_0, num_label_1 개수만 추출
+        selected_label_0_indices = label_0_indices[:num_label_0]
+        selected_label_1_indices = label_1_indices[:num_label_1]
+
+        # 최종 데이터셋 구성
+        selected_indices = np.concatenate((selected_label_0_indices, selected_label_1_indices))
+        # np.random.shuffle(selected_indices)
+
+        self.Ptrain_final = self.Pdata[selected_indices]
+        self.Ptrain_label_final = self.Pdata_label[selected_indices]
+
+        T, F = self.Ptrain_final[0]['arr'].shape
+        D = len(self.Ptrain_final[0]['extended_static'])
+
+        Ptrain_tensor = np.zeros((len(self.Ptrain_final), T, F))
+        Ptrain_static_tensor = np.zeros((len(self.Ptrain_final), D))
+
+        for i in range(len(self.Ptrain_final)):
+            Ptrain_tensor[i] = self.Ptrain_final[i]['arr']
+            Ptrain_static_tensor[i] = self.Ptrain_final[i]['extended_static']
+
+        mf, stdf = getStats(Ptrain_tensor)
+        ms, ss = getStats_static(Ptrain_static_tensor, dataset='P19')
+
+        self.Ptrain_tensor, self.Ptrain_static_tensor, self.Ptrain_time_tensor, self.ytrain_tensor = tensorize_normalize(
+            self.Ptrain_final, self.Ptrain_label_final, mf, stdf, ms, ss)
+        
+        self.tot_len = len(self.Ptrain_tensor)
+        
+        return self.tot_len
+
+    def __getitem__(self, index):
+        
+        data_x = self.Ptrain_tensor[index][:, :int(self.Ptrain_tensor.shape[2] / 2)] # B, T, N
+        data_y = self.ytrain_tensor[index]
+        time = self.Ptrain_time_tensor[index]
+        real_time = self.Pdata[index]['length'] 
+        
+        demo_list = []
+        for d in range(len(self.Pdata[index]['extended_static'])):
+            demo_list.append(self.Pdata[index]['extended_static'][d])
+        demo = np.array(demo_list)
+        
+        return data_x, data_y, time, real_time, demo
+        
+        
+    def __len__(self):
+        return self.tot_len
+
+
 def getStats(P_tensor):
     N, T, F = P_tensor.shape
     Pf = P_tensor.transpose((2, 0, 1)).reshape(F, -1)
