@@ -8,7 +8,7 @@ from transformers import LlamaConfig, LlamaModel, LlamaTokenizer, GPT2Config, GP
     BertModel, BertTokenizer, AutoTokenizer, AutoModelForCausalLM, GPT2LMHeadModel
 import transformers
 from utils.tools import load_domain_content, load_variable_content, min_with_na_handling, max_with_na_handling, median_with_na_handling
-from layers.Embed import PatchEmbedding_2D
+from layers.Embed import PatchEmbedding_2D, PromptPatchEmbedding
 
 transformers.logging.set_verbosity_error()
 
@@ -80,7 +80,7 @@ def get_x_vital_last(x_vital, mask_vital):
     return x_vital_last
 
 class TemporalAttention(nn.Module):
-    def __init__(self, input_dim, d_ff, seq_len):
+    def __init__(self, input_dim, d_ff, seq_len, prompt_dim, patch_num):
         super(TemporalAttention, self).__init__()
         self.d_ff = d_ff
         self.seq_len = seq_len
@@ -91,7 +91,7 @@ class TemporalAttention(nn.Module):
         self.value_proj = nn.Linear(input_dim, d_ff)
         
         # Linear layer for computing temporal attention
-        self.temporal_attn = nn.Linear(seq_len, 1)
+        self.temporal_attn = nn.Linear(prompt_dim + patch_num, 1)
 
     def forward(self, x):
         # x: (B, T, D) where D is input_dim
@@ -108,7 +108,7 @@ class TemporalAttention(nn.Module):
         temporal_attention = self.temporal_attn(attention_scores)  # (B, T, 1)
         
         # Compute the latent representation
-        latent = torch.matmul(value.transpose(2, 1), temporal_attention).squeeze(-1)  # (B, d_ff)
+        latent = torch.matmul(value.transpose(2, 1), nn.Softmax(dim=1)(temporal_attention)).squeeze(-1)  # (B, d_ff)
         
         return latent
 
@@ -124,6 +124,7 @@ class Model(nn.Module):
         self.patch_len = configs.patch_len
         self.stride = configs.stride
         self.d_model = configs.d_model
+        self.prompt_dim = configs.prompt_dim
 
         if configs.llm_model == 'LLAMA':
             # self.llama_config = LlamaConfig.from_pretrained('/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/')
@@ -270,7 +271,7 @@ class Model(nn.Module):
         self.embedding_layers = self.llm_model.get_input_embeddings()
         self.reprogramming_layer = ReprogrammingLayer(self.d_model, configs.n_heads, None, self.d_llm)
         self.patch_embedding = PatchEmbedding_2D(configs.d_model, self.patch_len, self.stride, configs.dropout).float()
-        
+        self.prompt_patching = PromptPatchEmbedding(input_dim = configs.llm_dim, output_dim = configs.llm_dim, target_len = self.prompt_dim).float()
         self.word_embeddings = self.llm_model.get_input_embeddings().weight
         self.vocab_size = self.word_embeddings.shape[0]
         self.num_tokens = 10000
@@ -281,7 +282,7 @@ class Model(nn.Module):
         self.b_dg_x = torch.nn.Parameter(torch.Tensor(8))
         
         # Temporal attention
-        self.temporal_attention = TemporalAttention(configs.llm_dim, self.d_ff, self.seq_len)
+        self.temporal_attention = TemporalAttention(configs.llm_dim, self.d_ff, self.seq_len, self.prompt_dim, self.patch_num)
         
         # classification
         self.output_projection = ClassificationHead(self.d_ff, self.pred_len, head_dropout=0.1)
@@ -353,7 +354,6 @@ class Model(nn.Module):
                 if np.all(np.isnan(values)):
                     # Handle case where all values are NaN
                     prompt_batch += (
-                        f"Variable description: {current_val} {variable_dcb}. "
                         f"variable {current_val} are all missing. "
                     )
                 else:
@@ -386,7 +386,7 @@ class Model(nn.Module):
         
         with torch.no_grad():
             prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(x_enc.device))  # # (B, prompt_token, d_llm)
-       
+        prompt_embeddings = self.prompt_patching(prompt_embeddings) # (B, prompt_dim, d_llm)
         source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
 
         # Fill missing value using decay rate
@@ -415,8 +415,7 @@ class Model(nn.Module):
         with torch.no_grad():
             out = self.llm_model(inputs_embeds=llama_enc_out).hidden_states[-1]
             
-        truncated_out = out[:, -self.seq_len:]
-        latent = self.temporal_attention(truncated_out)
+        latent = self.temporal_attention(out)
 
         #Classifier
         dec_out = self.output_projection(latent.to(x_enc.device)) # B, pred_window

@@ -88,3 +88,42 @@ class PromptPatchEmbedding(nn.Module):
         x = x.transpose(1, 2)[:, :self.dim, :]
   
         return x
+    
+class TokenEmbedding_2D(nn.Module):
+    def __init__(self, c_in, d_model):
+        super(TokenEmbedding_2D, self).__init__()
+        # 2D Convolution layer
+        self.tokenConv = nn.Conv2d(in_channels=c_in, out_channels=d_model,
+                                   kernel_size=(8, 3), padding=(0, 1), bias=True)
+        # Initialize weights
+        nn.init.kaiming_normal_(self.tokenConv.weight, mode='fan_in', nonlinearity='leaky_relu')
+
+    def forward(self, x):
+        # x is expected to be (B, N, T) but for Conv2d we need (B, C, H, W)
+        x = x.unsqueeze(1)  # Add channel dimension: (B, 1, N, T)
+        x = self.tokenConv(x)  # Apply 2D Convolution: (B, d_model, 1, T)
+        x = x.mean(dim=3)  # Pooling over the N dimension to aggregate information: (B, d_model, 1)
+        return x
+
+class PatchEmbedding_2D(nn.Module):
+    def __init__(self, d_model, patch_len, stride, dropout):
+        super(PatchEmbedding_2D, self).__init__()
+        self.patch_len = patch_len
+        self.stride = stride
+        self.d_model = d_model
+        # 2D Convolution layer for embedding
+        self.value_embedding = TokenEmbedding_2D(c_in=1, d_model=d_model)
+        self.padding_patch_layer = ReplicationPad1d((0, stride))
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        B, N, T = x.shape
+        
+        x = self.padding_patch_layer(x)
+        x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)  # (B, N, patch_num, patch_len)
+ 
+        x = x.permute(0, 2, 1, 3)  # (B, patch_num, N, patch_len)
+        x = x.contiguous().view(B * x.shape[1], x.shape[2], x.shape[3]).float()   # (B * patch_num, N, patch_len)
+        x = self.value_embedding(x)  # Apply embedding: (B * patch_num, d_model, T')
+        x = x.view(B, -1, x.shape[1])  # Reshape back: (B, patch_num, d_model)
+        return self.dropout(x), N
