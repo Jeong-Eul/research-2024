@@ -6,20 +6,20 @@ from torch.nn.utils import weight_norm
 import math
 
 
-class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model):
-        super(TokenEmbedding, self).__init__()
-        padding = 1 if torch.__version__ >= '1.5.0' else 2
-        self.tokenConv = nn.Conv1d(in_channels=c_in, out_channels=d_model,
-                                   kernel_size=3, padding=padding, padding_mode='replicate')
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(
-                    m.weight, mode='fan_in', nonlinearity='leaky_relu')
+# class TokenEmbedding(nn.Module):
+#     def __init__(self, c_in, d_model):
+#         super(TokenEmbedding, self).__init__()
+#         padding = 1 if torch.__version__ >= '1.5.0' else 2
+#         self.tokenConv = nn.Conv1d(in_channels=c_in, out_channels=d_model,
+#                                    kernel_size=3, padding=padding, padding_mode='replicate')
+#         for m in self.modules():
+#             if isinstance(m, nn.Conv1d):
+#                 nn.init.kaiming_normal_(
+#                     m.weight, mode='fan_in', nonlinearity='leaky_relu')
 
-    def forward(self, x):
-        x = self.tokenConv(x.permute(0, 2, 1)).transpose(1, 2)
-        return x # B * N,  patch num, d_model
+#     def forward(self, x):
+#         x = self.tokenConv(x.permute(0, 2, 1)).transpose(1, 2)
+#         return x # B * N,  patch num, d_model
 
 class ReplicationPad1d(nn.Module):
     def __init__(self, padding) -> None:
@@ -31,32 +31,32 @@ class ReplicationPad1d(nn.Module):
         output = torch.cat([input, replicate_padding], dim=-1) # B, N, T + Padding
         return output 
 
-class PatchEmbedding(nn.Module):
-    def __init__(self, d_model, patch_len, stride, dropout):
-        super(PatchEmbedding, self).__init__()
-        # Patching
-        self.patch_len = patch_len
-        self.stride = stride
-        self.padding_patch_layer = ReplicationPad1d((0, stride))
+# class PatchEmbedding(nn.Module):
+#     def __init__(self, d_model, patch_len, stride, dropout):
+#         super(PatchEmbedding, self).__init__()
+#         # Patching
+#         self.patch_len = patch_len
+#         self.stride = stride
+#         self.padding_patch_layer = ReplicationPad1d((0, stride))
 
-        # Backbone, Input encoding: projection of feature vectors onto a d-dim vector space
-        self.value_embedding = TokenEmbedding(patch_len, d_model).float()
+#         # Backbone, Input encoding: projection of feature vectors onto a d-dim vector space
+#         self.value_embedding = TokenEmbedding(patch_len, d_model).float()
 
-        # Positional embedding
-        # self.position_embedding = PositionalEmbedding(d_model)
+#         # Positional embedding
+#         # self.position_embedding = PositionalEmbedding(d_model)
 
-        # Residual dropout
-        self.dropout = nn.Dropout(dropout)
+#         # Residual dropout
+#         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
-        # do patching shape of x is B, N, T
-        n_vars = x.shape[1] # N
-        x = self.padding_patch_layer(x) # B, N, T + Padding
-        x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride) # B, N, patch num, patch len
-        x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3])) # B * N, patch num, patch len
-        # Input encoding
-        x = self.value_embedding(x)
-        return self.dropout(x), n_vars
+#     def forward(self, x):
+#         # do patching shape of x is B, N, T
+#         n_vars = x.shape[1] # N
+#         x = self.padding_patch_layer(x) # B, N, T + Padding
+#         x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride) # B, N, patch num, patch len
+#         x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3])) # B * N, patch num, patch len
+#         # Input encoding
+#         x = self.value_embedding(x)
+#         return self.dropout(x), n_vars
     
 class PromptPatchEmbedding(nn.Module):
     def __init__(self, input_dim, output_dim, target_len):
@@ -79,6 +79,9 @@ class PromptPatchEmbedding(nn.Module):
 
     def forward(self, x):
         B_N, L, D = x.shape
+        
+        # x = self.conv1(x)
+        
         x = x.transpose(1, 2)
         x = self.conv1(x)  # (B * N, D, L) -> (B * N, intermediate_dim, P)
         x = self.conv2(x)  # (B * N, intermediate_dim, P) -> (B * N, intermediate_dim, P)
@@ -89,41 +92,67 @@ class PromptPatchEmbedding(nn.Module):
   
         return x
     
-class TokenEmbedding_2D(nn.Module):
-    def __init__(self, c_in, d_model):
-        super(TokenEmbedding_2D, self).__init__()
-        # 2D Convolution layer
-        self.tokenConv = nn.Conv2d(in_channels=c_in, out_channels=d_model,
-                                   kernel_size=(8, 3), padding=(0, 1), bias=True)
-        # Initialize weights
-        nn.init.kaiming_normal_(self.tokenConv.weight, mode='fan_in', nonlinearity='leaky_relu')
+    
+class TokenEmbedding(nn.Module):
+    def __init__(self, c_in, d_model, patch_len, stride):
+        super(TokenEmbedding, self).__init__()
+        padding = 1 if torch.__version__ >= '1.5.0' else 2
+        self.tokenConv = nn.Conv1d(in_channels=c_in, out_channels=d_model, stride = stride,
+                                   kernel_size=patch_len, padding=padding, padding_mode='circular', bias=False)
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(
+                    m.weight, mode='fan_in', nonlinearity='leaky_relu')
 
     def forward(self, x):
-        # x is expected to be (B, N, T) but for Conv2d we need (B, C, H, W)
-        x = x.unsqueeze(1)  # Add channel dimension: (B, 1, N, T)
-        x = self.tokenConv(x)  # Apply 2D Convolution: (B, d_model, 1, T)
-        x = x.mean(dim=3)  # Pooling over the N dimension to aggregate information: (B, d_model, 1)
+        # B, N, T -> B, d_model, patch_num
+        x = self.tokenConv(x).transpose(1, 2)
         return x
 
-class PatchEmbedding_2D(nn.Module):
-    def __init__(self, d_model, patch_len, stride, dropout):
-        super(PatchEmbedding_2D, self).__init__()
+class ReplicationPad1d(nn.Module):
+    def __init__(self, padding) -> None:
+        super(ReplicationPad1d, self).__init__()
+        self.padding = padding
+
+    def forward(self, input):
+        replicate_padding = input[:, :, -1].unsqueeze(-1).repeat(1, 1, self.padding[-1])
+        output = torch.cat([input, replicate_padding], dim=-1) # B, N, T + Padding
+        return output 
+
+class PatchEmbedding(nn.Module):
+    def __init__(self, d_model, N, stride, patch_len, dropout):
+        super(PatchEmbedding, self).__init__()
+        # Patching
         self.patch_len = patch_len
-        self.stride = stride
-        self.d_model = d_model
-        # 2D Convolution layer for embedding
-        self.value_embedding = TokenEmbedding_2D(c_in=1, d_model=d_model)
+        self.variable_num = N
         self.padding_patch_layer = ReplicationPad1d((0, stride))
+        # Backbone, Input encoding: projection of feature vectors onto a d-dim vector space
+        self.value_embedding = TokenEmbedding(self.variable_num, d_model, patch_len, stride)
+
+        # Residual dropout
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        B, N, T = x.shape
-        
-        x = self.padding_patch_layer(x)
-        x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)  # (B, N, patch_num, patch_len)
- 
-        x = x.permute(0, 2, 1, 3)  # (B, patch_num, N, patch_len)
-        x = x.contiguous().view(B * x.shape[1], x.shape[2], x.shape[3]).float()   # (B * patch_num, N, patch_len)
-        x = self.value_embedding(x)  # Apply embedding: (B * patch_num, d_model, T')
-        x = x.view(B, -1, x.shape[1])  # Reshape back: (B, patch_num, d_model)
-        return self.dropout(x), N
+        # do patching
+        # B, N, T
+        n_vars = x.shape[1]
+        # x = self.padding_patch_layer(x) # B, N, T + Padding
+        # x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride) # B, N, patch num, patch len
+        # x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3])) # B*patch_num, N, patch len
+        # Input encoding
+        x = self.value_embedding(x)
+        return self.dropout(x), n_vars
+    
+class Patching(nn.Module):
+    def __init__(self, patch_len, stride, vital_index, patch_num):
+        super(Patching, self).__init__()
+        self.patch_len = patch_len
+        self.stride = stride
+        self.vital_index = vital_index
+        self.patch_num = patch_num
+
+    def forward(self, x):
+        B, T, N = x.shape
+        x = x.permute(0, 2, 1).reshape(-1, x.size(1)) # B*N, T
+        x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride).reshape(B, len(self.vital_index), self.patch_num, self.patch_len) # B, N, patch_num, patch_len
+        return x

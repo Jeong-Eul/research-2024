@@ -20,8 +20,6 @@ class P19Datasaets(Dataset):
         self.PT_dict_path = PT_dict_path
         self.tot_len = self.__read_data__()
         self.slide_unit = 1
-
-        # self.tot_len = 100
         
     def __read_data__(self):
         
@@ -47,7 +45,7 @@ class P19Datasaets(Dataset):
         mf, stdf = getStats(Ptrain_tensor)
         ms, ss = getStats_static(Ptrain_static_tensor, dataset='P19')
 
-        self.Ptrain_tensor, self.Ptrain_static_tensor, self.Ptrain_time_tensor, self.ytrain_tensor = tensorize_normalize(self.Pdata, 
+        self.Ptrain_tensor, self.Ptrain_static_tensor, self.Ptrain_time_tensor, self.ytrain_tensor, self.paddimg_mask = tensorize_normalize(self.Pdata, 
                                                                                                      self.Pdata_label,mf,
                                                                                                     stdf, ms, ss)
         
@@ -61,13 +59,85 @@ class P19Datasaets(Dataset):
         data_y = self.ytrain_tensor[index]
         time = self.Ptrain_time_tensor[index]
         real_time = self.Pdata[index]['length'] 
-        
+        mask = self.paddimg_mask[index]
         demo_list = []
         for d in range(len(self.Pdata[index]['extended_static'])):
             demo_list.append(self.Pdata[index]['extended_static'][d])
         demo = np.array(demo_list)
         
-        return data_x, data_y, time, real_time, demo
+        return data_x, data_y, time, real_time, demo, mask
+        
+    def __len__(self):
+        return self.tot_len
+    
+class P19Datasaets_V4(Dataset):
+    def __init__(self, idx_dataset, 
+                 root_path = '/home/DAHS2/Timellm/Replicate_for_P19/',
+                 PT_dict_path='dataset/data/processed_data/PT_dict_list_6.npy', 
+                 outcomes_path = 'dataset/data/processed_data/arr_outcomes_6.npy'):
+
+        # init
+        self.split_id = idx_dataset #sample id set [Train, Valid, Test]
+        self.seq_len = 60
+        self.root_path = root_path
+        self.outcomes_path = outcomes_path
+        self.PT_dict_path = PT_dict_path
+        self.tot_len = self.__read_data__()
+        self.slide_unit = 1
+
+        # self.tot_len = 100
+        
+    def __read_data__(self):
+        
+        Pdict_list = np.load(self.root_path + self.PT_dict_path, allow_pickle=True)
+        arr_outcomes = np.load(self.root_path + self.outcomes_path, allow_pickle=True)
+        
+        Pdict_list = np.load(self.root_path + self.PT_dict_path, allow_pickle=True)
+        arr_outcomes = np.load(self.root_path + self.outcomes_path, allow_pickle=True)
+        
+        self.Pdata = Pdict_list[self.split_id]
+        self.Pdata_label = arr_outcomes[self.split_id]
+        
+        T, F = self.Pdata[0]['arr'].shape # 60, 34
+        D = len(self.Pdata[0]['extended_static'])
+
+        Ptrain_tensor = np.zeros((len(self.Pdata), T, F))
+        Ptrain_static_tensor = np.zeros((len(self.Pdata), D))
+
+        for i in range(len(self.Pdata)):
+            Ptrain_tensor[i] = self.Pdata[i]['arr'] # num of patient, T, N
+            Ptrain_static_tensor[i] = self.Pdata[i]['extended_static']
+
+        self.mf, stdf = getStats(Ptrain_tensor)
+        ms, ss = getStats_static(Ptrain_static_tensor, dataset='P19')
+
+        self.Ptrain_tensor, self.Ptrain_static_tensor, self.Ptrain_time_tensor, self.ytrain_tensor, self.paddimg_mask = tensorize_normalize(self.Pdata, 
+                                                                                                     self.Pdata_label, self.mf,
+                                                                                                    stdf, ms, ss)
+        
+        self.tot_len = len(self.Ptrain_tensor)
+        
+        return self.tot_len
+
+    def __getitem__(self, index):
+        
+        data_x = self.Ptrain_tensor[index][:, :int(self.Ptrain_tensor.shape[2] / 2)] # B, T, N
+        data_x_mask = self.Ptrain_tensor[index][:, int(self.Ptrain_tensor.shape[2] / 2):]
+        data_y = self.ytrain_tensor[index]
+        time = self.Ptrain_time_tensor[index]
+        real_time = self.Pdata[index]['length'] 
+        mask = self.paddimg_mask[index]
+        demo_list = []
+        for d in range(len(self.Pdata[index]['extended_static'])):
+            demo_list.append(self.Pdata[index]['extended_static'][d])
+        demo = np.array(demo_list)
+        
+        time_interval_matrix = calculate_time_intervals(time.numpy(), data_x_mask.numpy())
+
+        # Time interval matrix를 torch.Tensor로 변환
+        delta = torch.Tensor(time_interval_matrix)
+        
+        return data_x, data_x_mask, delta, data_y, time, real_time, demo, mask
         
     def __len__(self):
         return self.tot_len
@@ -158,8 +228,6 @@ class P19DatasaetsUpSampled(Dataset):
         self.tot_len = self.__read_data__()
         self.slide_unit = 1
 
-        # self.tot_len = 100
-
     def __read_data__(self):
         
         Pdict_list = np.load(self.root_path + self.PT_dict_path, allow_pickle=True)
@@ -205,7 +273,7 @@ class P19DatasaetsUpSampled(Dataset):
         mf, stdf = getStats(Ptrain_tensor)
         ms, ss = getStats_static(Ptrain_static_tensor, dataset='P19')
 
-        self.Ptrain_tensor, self.Ptrain_static_tensor, self.Ptrain_time_tensor, self.ytrain_tensor = tensorize_normalize(self.Ptrain_final, 
+        self.Ptrain_tensor, self.Ptrain_static_tensor, self.Ptrain_time_tensor, self.ytrain_tensor, self.paddimg_mask = tensorize_normalize(self.Ptrain_final, 
                                                                                                      self.Ptrain_label_final,mf,
                                                                                                     stdf, ms, ss)
         
@@ -219,19 +287,111 @@ class P19DatasaetsUpSampled(Dataset):
         data_y = self.ytrain_tensor[index]
         time = self.Ptrain_time_tensor[index]
         real_time = self.Ptrain_final[index]['length'] 
-        
+        mask = self.paddimg_mask[index]
         demo_list = []
         for d in range(len(self.Ptrain_final[index]['extended_static'])):
             demo_list.append(self.Ptrain_final[index]['extended_static'][d])
         demo = np.array(demo_list)
         
-        return data_x, data_y, time, real_time, demo
+        return data_x, data_y, time, real_time, demo, mask
         
         
     def __len__(self):
         return self.tot_len
     
+class P19DatasaetsUpSampled_V4(Dataset):
+    def __init__(self, idx_dataset, 
+                 root_path = '/home/DAHS2/Timellm/Replicate_for_P19/',
+                 PT_dict_path='dataset/data/processed_data/PT_dict_list_6.npy', 
+                 outcomes_path = 'dataset/data/processed_data/arr_outcomes_6.npy'):
 
+        # init
+        self.split_id = idx_dataset #sample id set [Train, Valid, Test]
+        self.seq_len = 60
+        self.root_path = root_path
+        self.outcomes_path = outcomes_path
+        self.PT_dict_path = PT_dict_path
+        self.tot_len = self.__read_data__()
+        self.slide_unit = 1
+
+        # self.tot_len = 100
+
+    def __read_data__(self):
+        
+        Pdict_list = np.load(self.root_path + self.PT_dict_path, allow_pickle=True)
+        arr_outcomes = np.load(self.root_path + self.outcomes_path, allow_pickle=True)
+        
+        self.Pdata = Pdict_list[self.split_id]
+        self.Pdata_label = arr_outcomes[self.split_id]
+        
+        label_0_indices = np.where(self.Pdata_label == 0)[0]
+        label_1_indices = np.where(self.Pdata_label == 1)[0]
+
+        # Oversampling of label 1
+        label_1_count = len(label_1_indices)
+        label_0_count = len(label_0_indices)
+        oversample_count = label_0_count - label_1_count
+
+        # Oversampling indices from label_1_indices with replacement
+        oversampled_indices = np.random.choice(label_1_indices, oversample_count, replace=True)
+
+        # 결합하여 최종 데이터셋 구성
+        Ptrain_oversampled = self.Pdata[oversampled_indices]
+        Ptrain_label_oversampled = self.Pdata_label[oversampled_indices]
+
+        # 결합
+        Ptrain_final = np.concatenate((Ptrain_oversampled, self.Pdata[label_0_indices], self.Pdata[label_1_indices]), axis=0)
+        Ptrain_label_final = np.concatenate((Ptrain_label_oversampled, self.Pdata_label[label_0_indices], self.Pdata_label[label_1_indices]), axis=0)
+
+        # 데이터 셔플링
+        shuffle_indices = np.random.permutation(len(Ptrain_final))
+        self.Ptrain_final = Ptrain_final[shuffle_indices]
+        self.Ptrain_label_final = Ptrain_label_final[shuffle_indices]
+        
+        T, F = self.Ptrain_final[0]['arr'].shape # 60, 34
+        D = len(self.Ptrain_final[0]['extended_static'])
+
+        Ptrain_tensor = np.zeros((len(self.Ptrain_final), T, F))
+        Ptrain_static_tensor = np.zeros((len(self.Ptrain_final), D))
+
+        for i in range(len(self.Ptrain_final)):
+            Ptrain_tensor[i] = self.Ptrain_final[i]['arr'] # num of patient, T, N
+            Ptrain_static_tensor[i] = self.Ptrain_final[i]['extended_static']
+
+        self.mf, stdf = getStats(Ptrain_tensor)
+        ms, ss = getStats_static(Ptrain_static_tensor, dataset='P19')
+
+        self.Ptrain_tensor, self.Ptrain_static_tensor, self.Ptrain_time_tensor, self.ytrain_tensor, self.paddimg_mask = tensorize_normalize(self.Ptrain_final, 
+                                                                                                     self.Ptrain_label_final,self.mf,
+                                                                                                    stdf, ms, ss)
+        
+        self.tot_len = len(self.Ptrain_tensor)
+        
+        return self.tot_len
+
+    def __getitem__(self, index):
+        
+        data_x = self.Ptrain_tensor[index][:, :int(self.Ptrain_tensor.shape[2] / 2)] # B, T, N
+        data_x_mask = self.Ptrain_tensor[index][:, int(self.Ptrain_tensor.shape[2] / 2):]
+        data_y = self.ytrain_tensor[index]
+        time = self.Ptrain_time_tensor[index]
+        real_time = self.Ptrain_final[index]['length'] 
+        mask = self.paddimg_mask[index]
+        demo_list = []
+        for d in range(len(self.Ptrain_final[index]['extended_static'])):
+            demo_list.append(self.Ptrain_final[index]['extended_static'][d])
+        demo = np.array(demo_list)
+        
+        time_interval_matrix = calculate_time_intervals(time.numpy(), data_x_mask.numpy())
+
+        # Time interval matrix를 torch.Tensor로 변환
+        delta = torch.Tensor(time_interval_matrix)
+        
+        return data_x, data_x_mask, delta, data_y, time, real_time, demo, mask
+        
+        
+    def __len__(self):
+        return self.tot_len
 
 class P19Visualization(Dataset):
     def __init__(self, idx_dataset, 
@@ -300,6 +460,8 @@ class P19Visualization(Dataset):
         self.Ptrain_tensor, self.Ptrain_static_tensor, self.Ptrain_time_tensor, self.ytrain_tensor = tensorize_normalize(
             self.Ptrain_final, self.Ptrain_label_final, mf, stdf, ms, ss)
         
+        
+        
         self.tot_len = len(self.Ptrain_tensor)
         
         return self.tot_len
@@ -361,17 +523,30 @@ def getStats_static(P_tensor, dataset='P12'):
             ss[s] = np.std(vals_s)
     return ms, ss
 
+# def mask_normalize_static(P_tensor, ms, ss):
+#     N, S = P_tensor.shape
+#     Ps = P_tensor.transpose((1, 0))
+
+#     # input normalization
+#     for s in range(S):
+#         Ps[s] = (Ps[s] - ms[s]) / (ss[s] + 1e-18)
+
+#     # set missing values to zero after normalization
+#     for s in range(S):
+#         idx_missing = np.where(Ps[s, :] <= 0)
+#         Ps[s, idx_missing] = 0
+
+#     # reshape back
+#     Pnorm_tensor = Ps.reshape((S, N)).transpose((1, 0))
+#     return Pnorm_tensor
+
 def mask_normalize_static(P_tensor, ms, ss):
     N, S = P_tensor.shape
     Ps = P_tensor.transpose((1, 0))
 
-    # input normalization
-    for s in range(S):
-        Ps[s] = (Ps[s] - ms[s]) / (ss[s] + 1e-18)
-
     # set missing values to zero after normalization
     for s in range(S):
-        idx_missing = np.where(Ps[s, :] <= 0)
+        idx_missing = np.where(Ps[s, :] == 0)
         Ps[s, idx_missing] = 0
 
     # reshape back
@@ -384,10 +559,13 @@ def mask_normalize(P_tensor, mf, stdf, lengths):
 
     # Initialize the mask based on lengths
     M = np.zeros((N, T, F))
+    M_null = np.zeros((N, T, F))
     for i in range(N):
         length = lengths[i]  # 실제 체류한 길이
         M[i, :length, :] = 1  # 체류한 길이까지는 1로 설정
-
+        
+        M_null[i, :length, :] = 1  # 체류한 길이까지는 1로 설정
+        M_null[i, :length, :][P_tensor[i, :length, :] == 0] = np.nan
     # Normalize the time series variables
     Pf = P_tensor.transpose((2, 0, 1)).reshape(F, -1)
     M_3D = M.transpose((2, 0, 1)).reshape(F, -1)
@@ -399,7 +577,7 @@ def mask_normalize(P_tensor, mf, stdf, lengths):
     Pnorm_tensor = Pf.reshape((F, N, T)).transpose((1, 2, 0))
     Pfinal_tensor = np.concatenate([Pnorm_tensor, M], axis=2)
     
-    return Pfinal_tensor
+    return Pfinal_tensor, M_null
 
 def tensorize_normalize(P, y, mf, stdf, ms, ss):
     T, F = P[0]['arr'].shape
@@ -416,7 +594,7 @@ def tensorize_normalize(P, y, mf, stdf, ms, ss):
         P_static_tensor[i] = P[i]['extended_static']
         lengths[i] = P[i]['length']  # 실제 체류한 길이를 저장
 
-    P_tensor = mask_normalize(P_tensor, mf, stdf, lengths)  # lengths를 함께 전달
+    P_tensor, M_null = mask_normalize(P_tensor, mf, stdf, lengths)  # lengths를 함께 전달
     P_tensor = torch.Tensor(P_tensor)
 
     P_time = torch.Tensor(P_time) / 60.0  # convert mins to hours
@@ -424,5 +602,82 @@ def tensorize_normalize(P, y, mf, stdf, ms, ss):
     P_static_tensor = torch.Tensor(P_static_tensor)
 
     y_tensor = torch.Tensor(y[:, 0]).type(torch.LongTensor)
-    return P_tensor, P_static_tensor, P_time, y_tensor
+    return P_tensor, P_static_tensor, P_time, y_tensor, M_null
+
+# def calculate_time_intervals(P_time, mask_matrix):
+#     """
+#     Calculate time intervals using the given formula.
+    
+#     Args:
+#         P_time (array): Time array of shape (T, 1).
+#         mask_matrix (array): Mask array of shape (T, F).
+        
+#     Returns:
+#         delta (array): Time interval matrix of shape (T, F).
+#     """
+#     T, F = mask_matrix.shape
+#     delta = np.zeros((T, F))
+    
+#     for f in range(F):  # 각 변수를 순회
+#         for t in range(1, T):  # t=1부터 시작
+#             if mask_matrix[t-1, f] == 0:
+#                 delta[t, f] = P_time[t, 0] - P_time[t-1, 0] + delta[t-1, f]
+#             elif mask_matrix[t-1, f] == 1:
+#                 delta[t, f] = P_time[t, 0] - P_time[t-1, 0]
+#             # t == 1일 때 delta는 0으로 초기화됨
+    
+#     return delta
+
+
+# def mask_normalize(P_tensor, mf, stdf, lengths):
+#     """ Normalize time series variables. Missing ones are set to zero after normalization. """
+#     N, T, F = P_tensor.shape
+
+#     # Initialize the mask based on lengths and missing values
+#     M = np.zeros((N, T, F))
+#     P_M = np.zeros((N, T, F))
+#     for i in range(N):
+#         length = lengths[i]  # 실제 체류한 길이
+#         M[i, :length, :] = 1  # 체류한 길이까지는 1로 설정
+#         P_M[i, :length, :] = 1
+#         # Mask missing values (assuming NaNs represent missing values)
+#         M[i, :length, :][P_tensor[i, :length, :] == 0] = 0
+
+#     # Normalize the time series variables
+#     Pf = P_tensor.transpose((2, 0, 1)).reshape(F, -1)
+#     M_3D = M.transpose((2, 0, 1)).reshape(F, -1)
+#     for f in range(F):
+#         Pf[f] = (Pf[f] - mf[f]) / (stdf[f] + 1e-18)
+#     Pf = Pf * M_3D  # Only apply normalization where M is 1 (valid data)
+
+#     # Reshape Pf back to original dimensions and add the mask M as the last feature
+#     Pnorm_tensor = Pf.reshape((F, N, T)).transpose((1, 2, 0))
+#     Pfinal_tensor = np.concatenate([Pnorm_tensor, M], axis=2)
+    
+#     return Pfinal_tensor, P_M
+
+# def tensorize_normalize(P, y, mf, stdf, ms, ss):
+#     T, F = P[0]['arr'].shape
+#     D = len(P[0]['extended_static'])
+
+#     P_tensor = np.zeros((len(P), T, F))
+#     P_time = np.zeros((len(P), T, 1))
+#     P_static_tensor = np.zeros((len(P), D))
+#     lengths = np.zeros(len(P), dtype=int)  # 각 시퀀스의 실제 체류 길이를 저장할 배열
+
+#     for i in range(len(P)):
+#         P_tensor[i] = P[i]['arr']
+#         P_time[i] = P[i]['time']
+#         P_static_tensor[i] = P[i]['extended_static']
+#         lengths[i] = P[i]['length']  # 실제 체류한 길이를 저장
+
+#     P_tensor, P_M = mask_normalize(P_tensor, mf, stdf, lengths)  # lengths를 함께 전달
+#     P_tensor = torch.Tensor(P_tensor)
+
+#     P_time = torch.Tensor(P_time) / 60.0  # convert mins to hours
+#     P_static_tensor = mask_normalize_static(P_static_tensor, ms, ss)
+#     P_static_tensor = torch.Tensor(P_static_tensor)
+
+#     y_tensor = torch.Tensor(y[:, 0]).type(torch.LongTensor)
+#     return P_tensor, P_static_tensor, P_time, y_tensor, P_M
 
