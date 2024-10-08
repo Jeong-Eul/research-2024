@@ -130,8 +130,8 @@ if __name__ == '__main__':
     
     args.vocab = load_vocabulary()
     args.domain = load_domain_content('Sepsis')
-    args.vital_index = np.arange(34)[:8]
-    args.lab_index = np.arange(34)[8:]
+    args.vital_index = np.arange(34)[:7]
+    args.lab_index = np.arange(34)[7:]
     
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(kwargs_handlers=[ddp_kwargs], gradient_accumulation_steps=2, deepspeed_plugin=None)

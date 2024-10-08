@@ -8,7 +8,7 @@ export NCCL_IB_DISABLE=1
 
 model_name=EHRTimeLLM
 train_epochs=20
-learning_rate=0.0001
+learning_rate=0.001
 llama_layers=16
 
 master_port=1041
