@@ -106,9 +106,9 @@ class Ehrtimellm(nn.Module):
         elif configs.llm_model == 'GPT2':
             self.gpt2_config = GPT2Config.from_pretrained('openai-community/gpt2')
 
-            # self.gpt2_config.num_hidden_layers = configs.llm_layers
-            # self.gpt2_config.output_attentions = True
-            # self.gpt2_config.output_hidden_states = True
+            self.gpt2_config.num_hidden_layers = configs.llm_layers
+            self.gpt2_config.output_attentions = True
+            self.gpt2_config.output_hidden_states = True
             try:
                 self.llm_model = AutoModelForCausalLM.from_pretrained(
                     # "/mnt/alps/modelhub/pretrained_model/LLaMA/7B_hf/",
@@ -206,6 +206,10 @@ class Ehrtimellm(nn.Module):
         # Reprogramming
         self.reprogramming_layer = ReprogrammingLayer(self.d_ff, self.n_heads, d_keys = self.d_ff, d_llm=self.d_llm)
         
+        # Singular vector embedding
+        self.k = 5
+        self.sv_embedding_layer = nn.Linear(self.k, self.d_ff)
+        
         # Text Prototype
         self.word_embeddings = self.llm_model.get_input_embeddings().weight
         self.vocab_size = self.word_embeddings.shape[0]
@@ -213,7 +217,7 @@ class Ehrtimellm(nn.Module):
         self.mapping_layer = nn.Linear(self.vocab_size, self.num_tokens)
         
         # Variable aggragation
-        self.output_projection = ClassificationHead(self.d_ff, self.n_classes, head_dropout=0.3)
+        self.output_projection = ClassificationHead(self.d_ff*2, self.n_classes, head_dropout=0.3)
         self.variable_attn = Variable_Attention(self.d_ff, self.n_heads, configs.batch_size, self.enc_in, d_keys = self.d_ff, attention_dropout=0.1)
     
     def forward(self, x_enc, time, real_time, demo, null_mask, mask=None):
@@ -336,11 +340,10 @@ class Ehrtimellm(nn.Module):
         out = out[:, -T:]
         out = torch.sum(out, dim=1)/sqrt(self.d_llm) # B*N_vital, d_llm
         
-        
         # Time embedding for lab test measured time
         
-        lab_mask = (x_lab != 0)
-        lab_mask = lab_mask.permute(0, 2, 1) # B, N, T
+        lab_masking = (x_lab != 0)
+        lab_mask = lab_masking.permute(0, 2, 1) # B, N, T
         lab_mask = lab_mask.unsqueeze(-1) # B, N, T, 1
 
         observed_time_embedding = self.time2vec(time.reshape(B, 1, T, 1).repeat(1, N_lab, 1, 1).to(x_enc.device))
@@ -371,18 +374,64 @@ class Ehrtimellm(nn.Module):
         total = torch.cat([vital_processed, lab_processed], dim = 1) # B, N, D
         output = self.variable_attn(total) # B, d_ff
         
+    
+        # Temporal relation matrix
+        D = lab_masking.shape[-1]
+        delta_matrix = np.zeros((B, D, D))
+        k = 5
+        for b in range(B):
+            M = lab_masking[:, :real_time[b]].permute(0, 2, 1).cpu() # B, N, T
+            s = torch.arange(1, real_time[b] + 1).float() / 60.0
+            for i in range(D):
+                for j in range(D):
+                    if i == j:
+                        # Fill diagonal with the number of observed intervals (based on the number of observations)
+                        observed_times = s[M[b, i]]
+                        if len(observed_times) > 1:  # If there are at least two observations
+                            diffs = np.diff(observed_times)
+                            delta_matrix[b, i, i] = np.mean(diffs)  # Use the average time difference
+                        elif len(observed_times) == 1:
+                            delta_matrix[b, i, i] = observed_times
+                        else:
+                            delta_matrix[b, i, i] = s[-1]
+                    else:
+                        # Calculate the closest time difference between variables i and j
+                        times_i = s[M[b, i]]
+                        times_j = s[M[b, j]]
+                        # if len(times_i) > 0 and len(times_j) > 0:
+                        #     # Find the closest pair between i and j observations
+                        #     min_diff = np.min([np.abs(ti - tj) for ti in times_i for tj in times_j])
+                        if len(times_i) > 0 and len(times_j) > 0:
+                            # 두 시간 배열의 차이를 계산하여 벡터 연산으로 최솟값을 찾음
+                            diff_matrix = torch.abs(times_i[:, None] - times_j)  # 차이 행렬 생성
+                            min_diff = torch.min(diff_matrix)
+                            
+                            if min_diff == 0:
+                                delta_matrix[b, i, j] = 0.1  # Set to 0 if simultaneous measurement
+                            else:
+                                delta_matrix[b, i, j] = min_diff
+                        else:
+                            delta_matrix[b, i, j] = s[-1]
+                            
+        _, S, _ = np.linalg.svd(delta_matrix)
+        singular = np.tanh(S) 
+        top_k_singular_values = singular[:, :k] # B, K
+        sv = self.sv_embedding_layer(torch.tensor(top_k_singular_values).float().to(x_enc.device))
+        
+        # Add Sigular values
+        latent = torch.cat([output, sv], dim = 1)
+        
         # Classification Head
-        dec_out = self.output_projection(output) #B, target window
+        dec_out = self.output_projection(latent) #B, target window
         
-        # nan_positions = []
-        # for i in range(dec_out.size(0)):  # 첫 번째 차원 기준으로 반복
-        #     if torch.isnan(dec_out[i]).any():
-        #         nan_positions.append(i)
+        nan_positions = []
+        for i in range(dec_out.size(0)):  # 첫 번째 차원 기준으로 반복
+            if torch.isnan(dec_out[i]).any():
+                nan_positions.append(i)
 
-        # # NaN이 있을 경우에만 출력
-        # if nan_positions:
-        #     print(f"cls head NaN이 있는 첫 번째 차원의 위치: {nan_positions}")
-        
+        # NaN이 있을 경우에만 출력
+        if nan_positions:
+            print(f"cls head NaN이 있는 첫 번째 차원의 위치: {nan_positions}")
         
         return dec_out
 

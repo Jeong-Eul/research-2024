@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import time
 from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, average_precision_score, precision_score, recall_score, f1_score
-from models_gpt2 import *
+from models_gamma import *
 from utils import *
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
@@ -62,8 +62,8 @@ if __name__ == '__main__':
     parser.add_argument('--n_heads', type=int, default=1, help='num of heads')
     parser.add_argument('--d_ff', type=int, default=32, help='dimension of fcn')
     parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
-    parser.add_argument('--llm_model', type=str, default='GPT2', help='LLM model') # LLAMA, GPT2, BERT
-    parser.add_argument('--llm_dim', type=int, default='768', help='LLM model dimension')# LLama7b:4096; GPT2-small:768; BERT-base:768
+    parser.add_argument('--llm_model', type=str, default='MAMBA', help='LLM model') # LLAMA, GPT2, BERT, MAMBA
+    parser.add_argument('--llm_dim', type=int, default='768', help='LLM model dimension')# LLama7b:4096; GPT2-small:768; BERT-base:768, MAMBA:768
     parser.add_argument('--llm_layers', type=int, default=32)
 
     args, unknown = parser.parse_known_args()
@@ -107,7 +107,7 @@ if __name__ == '__main__':
 
     for missing_ratio in missing_ratios:
         num_epochs = 20
-        learning_rate = 0.0001  # 0.001 works slightly better, sometimes 0.0001 better, depends on settings and datasets
+        learning_rate = 0.00001  # 0.001 works slightly better, sometimes 0.0001 better, depends on settings and datasets
 
         if dataset == 'P12':
             d_static = 9
@@ -142,7 +142,9 @@ if __name__ == '__main__':
         precision_arr = np.zeros((n_splits, n_runs))
         recall_arr = np.zeros((n_splits, n_runs))
         F1_arr = np.zeros((n_splits, n_runs))
-        for k in range(n_splits):
+        # for k in range(n_splits):
+        custom = [2, 4]
+        for k in custom:
             split_idx = k + 1
             
             print('Split id: %d' % split_idx)
@@ -161,7 +163,7 @@ if __name__ == '__main__':
             if wandb:
                 # wandb.login(key=str('0126f71b25a3ecd1e32ed0a83047073475ee9cea'))
                 # config = wandb.config
-                wandb.init(name=f'GPT2-split-'+ str(split_idx),
+                wandb.init(name=f'GPT2+SVD+LR-split-'+ str(split_idx),
                            project='EHRTimeLLM-refined', 
                            config={'Learning Rate':learning_rate, "LLM": args.llm_model, "d_ff": args.d_ff, "d_model": args.d_model,"Heads": args.n_heads})
 
@@ -368,6 +370,8 @@ if __name__ == '__main__':
                                     "**[S] Epoch %d, aupr_val: %.4f, auc_val: %.4f **" % (
                                     epoch, aupr_val * 100, auc_val * 100))
                                 torch.save(model.state_dict(), model_path + arch + '_' + str(split_idx) + '.pt')
+                            torch.cuda.empty_cache()
+                            torch.cuda.ipc_collect()
                 accelerator.wait_for_everyone()
                 end = time.time()
                 time_elapsed = end - start
@@ -379,12 +383,41 @@ if __name__ == '__main__':
                 model = accelerator.prepare(model)
                 with torch.no_grad():
                     out_test = evaluate(accelerator, model, Ptest_tensor, Ptest_time_tensor, Ptest_static_tensor, test_paddimg_mask, n_classes=args.n_classes, static=static_info).numpy()
+                        
                     ypred = np.argmax(out_test, axis=1)
-                    denoms = np.sum(np.exp(out_test), axis=1).reshape((-1, 1))
-                    probs = np.exp(out_test) / (denoms +0.00001)
+                    # denoms = np.sum(np.exp(out_test), axis=1).reshape((-1, 1))
+                    # probs = np.exp(out_test) / (denoms +0.00001)
+                    
+                    # nan_positions = []
+                    # for i in range(probs.shape[0]):  # 첫 번째 차원 기준으로 반복
+                    #     if torch.isnan(torch.tensor(probs[i])).any():
+                    #         nan_positions.append(i)
+
+                    # # NaN이 있을 경우에만 출력
+                    # if nan_positions:
+                    #     print(f"probs NaN이 있는 첫 번째 차원의 위치: {nan_positions}")
+                    #     print(out_test[nan_positions[0]])
+                    #     print(out_test[nan_positions])
+                        
+                    out_test_max = np.max(out_test, axis=1, keepdims=True)
+                    out_test_stable = out_test - out_test_max  # 입력값 안정화
+
+                    denoms = np.sum(np.exp(out_test_stable), axis=1).reshape((-1, 1))
+                    probs = np.exp(out_test_stable) / (denoms + 0.00001)  # softmax 계산
+
+                    nan_positions = []
+                    for i in range(probs.shape[0]):  # 첫 번째 차원 기준으로 반복
+                        if torch.isnan(torch.tensor(probs[i])).any():
+                            nan_positions.append(i)
+
+                    # NaN이 있을 경우에만 출력
+                    if nan_positions:
+                        print(f"probs NaN이 있는 첫 번째 차원의 위치: {nan_positions}")
+                        print(out_test[nan_positions[0]])
                     
                     # NaN이 있는지 확인
                     if np.isnan(probs).any():
+                        print(probs)
                         raise ValueError("probs 배열에 NaN 값이 있습니다. 계산을 중단합니다.")
 
                     acc = np.sum(ytest.ravel() == ypred.ravel()) / ytest.shape[0]
